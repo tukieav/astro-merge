@@ -566,8 +566,8 @@ if (location.search.includes('debug=1')) {
 }
 
 (async () => {
-  cg.loadingStart && cg.loadingStart();
   await cg.initSDK();
+  cg.loadingStart();
   best = cg.loadBest();
   audio.setMuted(cg.getMuteSetting());
   cg.onSettingsChange(s => audio.setMuted(!!s.muteAudio));
