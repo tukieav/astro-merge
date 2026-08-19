@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>html,body{margin:0;padding:0;background:#000}</style></head>
+<body>
+<canvas id="cover"></canvas>
+<script>
+// Cover generator for Astro Merge — renders promo art at ?w=1920&h=1080 (or any size)
+const q = new URLSearchParams(location.search);
+const W = parseInt(q.get('w') || '1920', 10);
+const H = parseInt(q.get('h') || '1080', 10);
+const canvas = document.getElementById('cover');
+canvas.width = W; canvas.height = H;
+const g = canvas.getContext('2d');
+
+const TIERS = [
+  { r: 17,  c1: '#c9b8a8', c2: '#8a7263' },
+  { r: 24,  c1: '#e8e8f0', c2: '#9a9ab0' },
+  { r: 32,  c1: '#d8a86a', c2: '#94622c' },
+  { r: 40,  c1: '#f07850', c2: '#a03818' },
+  { r: 50,  c1: '#f8d888', c2: '#c08830' },
+  { r: 62,  c1: '#58a8f0', c2: '#1858a0', earth: true },
+  { r: 76,  c1: '#6878f8', c2: '#2830a0' },
+  { r: 92,  c1: '#88e8e0', c2: '#30a098' },
+  { r: 110, c1: '#f0d8a0', c2: '#b09050', ring: true },
+  { r: 130, c1: '#e8b880', c2: '#a06840', bands: true },
+  { r: 154, c1: '#fff0a0', c2: '#f08000', glow: true },
+];
+
+function drawPlanet(x, y, tier, scale, angle) {
+  const t = TIERS[tier];
+  g.save(); g.translate(x, y); g.rotate(angle || 0); g.scale(scale, scale);
+  if (t.glow) {
+    const gl = g.createRadialGradient(0,0,t.r*0.6, 0,0,t.r*1.8);
+    gl.addColorStop(0,'rgba(255,200,60,0.6)'); gl.addColorStop(1,'rgba(255,120,0,0)');
+    g.fillStyle=gl; g.beginPath(); g.arc(0,0,t.r*1.8,0,Math.PI*2); g.fill();
+  }
+  const grad = g.createRadialGradient(-t.r*0.35,-t.r*0.35,t.r*0.1, 0,0,t.r);
+  grad.addColorStop(0,t.c1); grad.addColorStop(1,t.c2);
+  g.fillStyle=grad; g.beginPath(); g.arc(0,0,t.r,0,Math.PI*2); g.fill();
+  if (tier <= 3) {
+    g.fillStyle='rgba(0,0,0,0.15)';
+    for (let i=0;i<3;i++){const a=i*2.1+tier;g.beginPath();g.arc(Math.cos(a)*t.r*0.45,Math.sin(a)*t.r*0.45,t.r*0.16,0,Math.PI*2);g.fill();}
+  }
+  if (t.bands) {
+    g.strokeStyle='rgba(120,60,20,0.35)'; g.lineWidth=t.r*0.12;
+    for (let i=-2;i<=2;i++){g.beginPath();g.ellipse(0,i*t.r*0.3,t.r*Math.sqrt(1-Math.pow(i*0.3,2))*0.97,t.r*0.1,0,0,Math.PI*2);g.stroke();}
+    g.fillStyle='rgba(200,70,40,0.6)';
+    g.beginPath();g.ellipse(t.r*0.35,t.r*0.25,t.r*0.2,t.r*0.12,0.3,0,Math.PI*2);g.fill();
+  }
+  if (t.earth) {
+    g.fillStyle='rgba(60,160,70,0.8)';
+    g.beginPath();g.ellipse(-t.r*0.25,-t.r*0.15,t.r*0.3,t.r*0.22,0.5,0,Math.PI*2);g.fill();
+    g.beginPath();g.ellipse(t.r*0.3,t.r*0.3,t.r*0.22,t.r*0.15,-0.4,0,Math.PI*2);g.fill();
+    g.fillStyle='rgba(255,255,255,0.35)';
+    g.beginPath();g.ellipse(t.r*0.1,-t.r*0.4,t.r*0.35,t.r*0.1,0.2,0,Math.PI*2);g.fill();
+  }
+  if (t.ring) {
+    g.strokeStyle='rgba(220,190,130,0.9)'; g.lineWidth=t.r*0.14;
+    g.beginPath();g.ellipse(0,0,t.r*1.45,t.r*0.4,-0.35,0,Math.PI*2);g.stroke();
+    g.strokeStyle='rgba(160,130,80,0.5)'; g.lineWidth=t.r*0.06;
+    g.beginPath();g.ellipse(0,0,t.r*1.62,t.r*0.46,-0.35,0,Math.PI*2);g.stroke();
+  }
+  g.strokeStyle='rgba(255,255,255,0.18)'; g.lineWidth=2;
+  g.beginPath();g.arc(0,0,t.r-1,0,Math.PI*2);g.stroke();
+  g.restore();
+}
+
+// background
+const bg = g.createLinearGradient(0,0,0,H);
+bg.addColorStop(0,'#0b0e1a'); bg.addColorStop(0.6,'#141a35'); bg.addColorStop(1,'#1a1040');
+g.fillStyle=bg; g.fillRect(0,0,W,H);
+
+// nebula blobs
+function nebula(x,y,r,c){const n=g.createRadialGradient(x,y,0,x,y,r);n.addColorStop(0,c);n.addColorStop(1,'rgba(0,0,0,0)');g.fillStyle=n;g.beginPath();g.arc(x,y,r,0,Math.PI*2);g.fill();}
+nebula(W*0.15,H*0.25,W*0.3,'rgba(90,40,160,0.25)');
+nebula(W*0.85,H*0.7,W*0.35,'rgba(30,90,160,0.22)');
+nebula(W*0.6,H*0.15,W*0.25,'rgba(160,60,90,0.15)');
+
+// stars (seeded)
+let seed = 42;
+function rnd(){seed=(seed*1103515245+12345)%2147483648;return seed/2147483648;}
+for (let i=0;i<260;i++){
+  const x=rnd()*W,y=rnd()*H,r=rnd()*2+0.4;
+  g.fillStyle='rgba(255,255,255,'+(0.3+rnd()*0.6)+')';
+  g.beginPath();g.arc(x,y,r,0,Math.PI*2);g.fill();
+}
+
+const sq = H / 1080; // proportional scale
+const square = q.get('sq') === '1';
+
+if (!square) {
+  // 16:9 layout: sun right, arc of planets, title left
+  drawPlanet(W*0.78, H*0.5, 10, 2.2*sq, 0);
+  drawPlanet(W*0.60, H*0.78, 9, 1.15*sq, 0.2);
+  drawPlanet(W*0.55, H*0.22, 8, 0.95*sq, -0.3);
+  drawPlanet(W*0.44, H*0.62, 5, 1.0*sq, 0.1);
+  drawPlanet(W*0.40, H*0.30, 3, 1.0*sq, 0.5);
+  drawPlanet(W*0.35, H*0.48, 1, 1.0*sq, 0);
+  drawPlanet(W*0.31, H*0.70, 0, 1.0*sq, 0);
+  // title
+  g.textAlign='left'; g.textBaseline='middle';
+  g.shadowColor='rgba(80,140,255,0.8)'; g.shadowBlur=30*sq;
+  g.fillStyle='#ffffff';
+  g.font='900 '+(150*sq)+'px "Segoe UI", Arial, sans-serif';
+  g.fillText('ASTRO', W*0.05, H*0.40);
+  g.fillText('MERGE', W*0.05, H*0.56);
+  g.shadowBlur=0;
+  g.fillStyle='rgba(255,255,255,0.85)';
+  g.font='600 '+(44*sq)+'px "Segoe UI", Arial, sans-serif';
+  g.fillText('Merge planets. Build the Sun.', W*0.052, H*0.68);
+} else {
+  // 1:1 layout: sun center-bottom, planets arc above, title top
+  drawPlanet(W*0.5, H*0.80, 10, 1.6*sq, 0);
+  drawPlanet(W*0.20, H*0.62, 9, 0.85*sq, 0.2);
+  drawPlanet(W*0.80, H*0.60, 8, 0.8*sq, -0.3);
+  drawPlanet(W*0.32, H*0.45, 5, 0.9*sq, 0.1);
+  drawPlanet(W*0.68, H*0.44, 3, 1.0*sq, 0.5);
+  drawPlanet(W*0.45, H*0.38, 1, 1.0*sq, 0);
+  drawPlanet(W*0.58, H*0.35, 0, 1.0*sq, 0);
+  g.textAlign='center'; g.textBaseline='middle';
+  g.shadowColor='rgba(80,140,255,0.8)'; g.shadowBlur=28*sq;
+  g.fillStyle='#ffffff';
+  g.font='900 '+(120*sq)+'px "Segoe UI", Arial, sans-serif';
+  g.fillText('ASTRO', W*0.5, H*0.13);
+  g.fillText('MERGE', W*0.5, H*0.25);
+  g.shadowBlur=0;
+}
+document.title = 'ready';
+</script>
+</body>
+</html>
