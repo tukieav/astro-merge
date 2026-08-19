@@ -1,0 +1,19 @@
+{
+  "name": "astro-merge",
+  "version": "1.0.0",
+  "description": "Astro Merge - suika-style planet merge game for CrazyGames",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --minify --outfile=dist/bundle.js && node scripts/pack.mjs",
+    "dev": "esbuild src/main.js --bundle --outfile=dist/bundle.js --watch --servedir=dist"
+  },
+  "dependencies": {
+    "matter-js": "^0.20.0"
+  },
+  "devDependencies": {
+    "@types/matter-js": "^0.20.0",
+    "esbuild": "^0.25.0",
+    "playwright": "^1.62.1"
+  }
+}
