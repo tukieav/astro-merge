@@ -60,3 +60,13 @@ Move mouse / drag finger — aim. Click / tap — drop planet.
 
 ## Age rating / audience
 All ages; designed for 10–16. No violence, no blood, no text chat, no user content.
+
+## Full Launch update (v1.1) — new features
+- **Stardust meta-currency**: earned every merge (bonus for big planets), new-best bonus, persists via CrazyGames data module + localStorage.
+- **Shop & unlocks**: UNDO DROP (1/run), FAR SIGHT (see 2 next planets), NOVA BOMB (clear 3 smallest, 1/run), NEON + NOVA planet skins.
+- **14 goals/missions** (create Saturn/Jupiter/Sun, combo x4/x8, score & merge milestones) with stardust rewards + toast notifications.
+- **Planet Dex**: collection screen tracking every planet tier created.
+- **Daily bonus streak** (+10/day stardust, up to +50).
+- **Dynamic difficulty**: easier planet distribution for first 2 minutes of each run.
+- **Keyboard controls** on desktop (arrows + space).
+- **Rewarded ad: DOUBLE stardust** after each run, in addition to Second Chance.

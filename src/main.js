@@ -4,6 +4,7 @@
 import Matter from 'matter-js';
 import * as audio from './audio.js';
 import * as cg from './sdk.js';
+import * as meta from './meta.js';
 
 const { Engine, World, Bodies, Body, Events, Composite } = Matter;
 
@@ -78,6 +79,34 @@ let mergesThisRun = 0;
 let usedSecondChance = false;
 let discoveredMax = 4;
 let gameOverAt = 0;
+let overlay = null;          // null | 'shop' | 'missions' | 'dex'
+let runStart = 0;            // for dynamic difficulty (easier first 2 min)
+let stardustEarned = 0;      // this run
+let lastDrop = null;         // { planet, prevCurrent, prevNext, prevNext2 } for UNDO
+let undoLeft = 0;
+let bombLeft = 0;
+let nextTier2 = 0;
+let toasts = [];             // { text, life } top notifications (missions, daily bonus)
+let dailyMsg = null;
+
+// skin palettes: id -> tier color overrides
+const SKINS = {
+  classic: null,
+  neon: [
+    ['#ff7bf5', '#a3128f'], ['#7bffec', '#0f9a8c'], ['#ffe97b', '#b28f0f'],
+    ['#ff7b7b', '#a31212'], ['#c07bff', '#5f12a3'], ['#7bff9e', '#0fa33d'],
+    ['#7b9dff', '#1236a3'], ['#7bfff3', '#0f8ba3'], ['#ffd47b', '#a3720f'],
+    ['#ff9e7b', '#a3390f'], ['#ffffb0', '#ff9500'],
+  ],
+  nova: [
+    ['#e0e6ff', '#5560a0'], ['#c8d4ff', '#4050a0'], ['#b0c0ff', '#3648a0'],
+    ['#98b0ff', '#2c40a0'], ['#88a4ff', '#2438a0'], ['#7898ff', '#1c30a0'],
+    ['#688cff', '#1428a0'], ['#5880ff', '#0c20a0'], ['#4874ff', '#0418a0'],
+    ['#3868ff', '#0010a0'], ['#ffffff', '#4060ff'],
+  ],
+};
+
+function toast(text) { toasts.push({ text, life: 3 }); }
 
 // starfield
 for (let i = 0; i < 90; i++) {
@@ -85,8 +114,11 @@ for (let i = 0; i < 90; i++) {
 }
 
 function randTier() {
-  // weighted: small planets more common
-  const w = [30, 26, 20, 14, 10];
+  // weighted: small planets more common; first 2 minutes of a run are easier
+  // (dynamic difficulty: bias toward smaller planets early)
+  const elapsed = runStart ? (performance.now() - runStart) / 1000 : 999;
+  const ease = Math.max(0, 1 - elapsed / 120); // 1 -> 0 over first 2 min
+  const w = [30 + 14 * ease, 26 + 6 * ease, 20, 14 - 8 * ease, 10 - 6 * ease];
   const total = w.reduce((a, b) => a + b, 0);
   let r = Math.random() * total;
   for (let i = 0; i < w.length; i++) { r -= w[i]; if (r <= 0) return i; }
@@ -115,8 +147,14 @@ function reset() {
   floatTexts = [];
   score = 0; combo = 0; comboTimer = 0; mergesThisRun = 0;
   usedSecondChance = false;
+  stardustEarned = 0;
+  lastDrop = null;
+  runStart = performance.now();
+  undoLeft = meta.state.unlocks.undo ? 1 : 0;
+  bombLeft = meta.state.unlocks.bomb ? 1 : 0;
   currentTier = randTier();
   nextTier = randTier();
+  nextTier2 = randTier();
   canDrop = true;
 }
 
@@ -155,7 +193,19 @@ function processMerges() {
     const gained = TIERS[nt].score * combo;
     score += gained;
     mergesThisRun++;
+    meta.recordMerge(nt);
+    meta.recordCombo(combo);
+    // stardust: 1 per merge + tier bonus for big planets
+    const sd = 1 + (nt >= 5 ? nt - 4 : 0);
+    meta.addStardust(sd);
+    stardustEarned += sd;
     if (nt > discoveredMax) { discoveredMax = nt; }
+    // missions check (cheap: only on merges)
+    for (const m of meta.checkMissions(score)) {
+      toast(`\u2605 Mission: ${m.label}  +${m.reward}\u2726`);
+      audio.bigMergeSound();
+      cg.happytime();
+    }
     // fx
     burstParticles(mx, my, TIERS[nt].c1, TIERS[nt].r);
     floatTexts.push({ x: mx, y: my - TIERS[nt].r, text: `+${gained}${combo > 1 ? '  x' + combo : ''}`, life: 1.2, big: combo > 2 });
@@ -194,17 +244,52 @@ function pointerMove(clientX) {
 }
 
 function pointerUp() {
+  if (overlay) return; // overlay buttons handled in handleClick
   if (state === 'menu') { startGame(); return; }
   if (state === 'gameover') return; // buttons handled separately
-  if (state !== 'playing' || !canDrop) return;
+  if (state !== 'playing' || !canDrop || overlay) return;
   audio.unlockAudio();
   canDrop = false;
-  spawnPlanet(currentTier, dropX, DROP_Y);
+  const dropped = spawnPlanet(currentTier, dropX, DROP_Y);
+  lastDrop = { planet: dropped, prevCurrent: currentTier, prevNext: nextTier, prevNext2: nextTier2 };
   audio.dropSound();
   currentTier = nextTier;
-  nextTier = randTier();
+  nextTier = nextTier2;
+  nextTier2 = randTier();
   dropX = clampDropX(dropX, currentTier);
   setTimeout(() => { canDrop = true; }, 450);
+}
+
+// UNDO power-up: revoke the last drop (only before it merges)
+function useUndo() {
+  if (state !== 'playing' || undoLeft <= 0 || !lastDrop) return;
+  const p = lastDrop.planet;
+  if (!planets.includes(p)) { lastDrop = null; return; } // already merged
+  World.remove(engine.world, p.body);
+  planets = planets.filter(q => q !== p);
+  burstParticles(p.body.position.x, p.body.position.y, '#ffffff', TIERS[p.tier].r);
+  currentTier = lastDrop.prevCurrent;
+  nextTier = lastDrop.prevNext;
+  nextTier2 = lastDrop.prevNext2;
+  dropX = clampDropX(dropX, currentTier);
+  undoLeft--;
+  lastDrop = null;
+  canDrop = true;
+  audio.warnSound();
+}
+
+// NOVA BOMB power-up: clear the 3 smallest planets
+function useBomb() {
+  if (state !== 'playing' || bombLeft <= 0 || planets.length < 3) return;
+  const sorted = [...planets].sort((a, b) => a.tier - b.tier).slice(0, 3);
+  for (const p of sorted) {
+    burstParticles(p.body.position.x, p.body.position.y, '#ffd84a', TIERS[p.tier].r * 1.5);
+    World.remove(engine.world, p.body);
+  }
+  planets = planets.filter(p => !sorted.includes(p));
+  bombLeft--;
+  shake = 8;
+  audio.bigMergeSound();
 }
 
 canvas.addEventListener('mousemove', e => pointerMove(e.clientX));
@@ -217,6 +302,24 @@ canvas.addEventListener('touchend', e => {
   const t = e.changedTouches[0];
   handleClick(t.clientX, t.clientY);
 }, { passive: false });
+
+// keyboard controls (desktop): arrows move, space/enter drops
+const keysHeld = {};
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') { keysHeld[e.code] = true; e.preventDefault(); }
+  if (e.code === 'Space' || e.code === 'Enter' || e.code === 'ArrowDown') {
+    e.preventDefault();
+    if (overlay) { overlay = null; return; }
+    pointerUp();
+  }
+});
+window.addEventListener('keyup', (e) => { delete keysHeld[e.code]; });
+function keyboardMove(dt) {
+  if (state !== 'playing' || overlay) return;
+  const sp = 420 * dt;
+  if (keysHeld['ArrowLeft']) dropX = clampDropX(dropX - sp, currentTier);
+  if (keysHeld['ArrowRight']) dropX = clampDropX(dropX + sp, currentTier);
+}
 
 // button hitboxes (set during render)
 let buttons = [];
@@ -240,9 +343,37 @@ function startGame() {
 async function gameOver() {
   state = 'gameover';
   gameOverAt = performance.now();
+  overlay = null;
   audio.gameOverSound();
   cg.gameplayStop();
-  if (score > best) { best = score; cg.saveBest(best); }
+  if (score > best) {
+    best = score;
+    cg.saveBest(best);
+    // record bonus: +10% of score as stardust on a new best
+    const bonus = Math.max(5, Math.floor(score * 0.1 / 10));
+    meta.addStardust(bonus);
+    stardustEarned += bonus;
+  }
+  doubledStardust = false;
+  meta.recordRunEnd(score);
+}
+
+let doubledStardust = false;
+async function doubleStardust() {
+  if (doubledStardust || stardustEarned <= 0) return;
+  state = 'adplaying';
+  const ok = await cg.requestAd('rewarded', {
+    onStart: () => audio.setMuted(true),
+    onFinish: () => audio.setMuted(cg.getMuteSetting()),
+  });
+  if (ok) {
+    meta.addStardust(stardustEarned);
+    toast(`+${stardustEarned}\u2726 doubled!`);
+    stardustEarned *= 2;
+    doubledStardust = true;
+    meta.save();
+  }
+  state = 'gameover';
 }
 
 async function restartWithAd() {
@@ -300,6 +431,9 @@ function checkDanger(now) {
 // ---------- Drawing ----------
 function drawPlanet(x, y, angle, tier, alpha = 1) {
   const t = TIERS[tier];
+  const pal = SKINS[meta.state.skin];
+  const c1 = pal ? pal[tier][0] : t.c1;
+  const c2 = pal ? pal[tier][1] : t.c2;
   g.save();
   g.translate(x, y);
   g.rotate(angle);
@@ -312,8 +446,8 @@ function drawPlanet(x, y, angle, tier, alpha = 1) {
     g.beginPath(); g.arc(0, 0, t.r * 1.6, 0, Math.PI * 2); g.fill();
   }
   const grad = g.createRadialGradient(-t.r * 0.35, -t.r * 0.35, t.r * 0.1, 0, 0, t.r);
-  grad.addColorStop(0, t.c1);
-  grad.addColorStop(1, t.c2);
+  grad.addColorStop(0, c1);
+  grad.addColorStop(1, c2);
   g.fillStyle = grad;
   g.beginPath(); g.arc(0, 0, t.r, 0, Math.PI * 2); g.fill();
   // craters / details
@@ -381,7 +515,7 @@ function drawButton(x, y, w, h, text, fn, color = '#4a6cf0') {
   g.font = `bold ${Math.floor(h * 0.42)}px 'Segoe UI', sans-serif`;
   g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillText(text, x + w / 2, y + h / 2 + 1);
-  buttons.push({ x, y, w, h, fn });
+  buttons.push({ x, y, w, h, fn, label: text });
 }
 
 let lastTime = performance.now();
@@ -390,7 +524,8 @@ function frame(now) {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
 
-  if (state === 'playing') {
+  if (state === 'playing' && !overlay) {
+    keyboardMove(dt);
     Engine.update(engine, 1000 / 60);
     processMerges();
     checkDanger(now);
@@ -404,6 +539,8 @@ function frame(now) {
   particles = particles.filter(p => p.life > 0);
   for (const f of floatTexts) { f.y -= 40 * dt; f.life -= dt; }
   floatTexts = floatTexts.filter(f => f.life > 0);
+  for (const t of toasts) t.life -= dt;
+  toasts = toasts.filter(t => t.life > 0);
   if (shake > 0) shake = Math.max(0, shake - dt * 30);
 
   render(now);
@@ -479,7 +616,10 @@ function render(now) {
     g.font = "14px 'Segoe UI', sans-serif";
     g.fillStyle = 'rgba(255,255,255,0.6)';
     g.fillText(`BEST ${Math.max(best, score)}`, 18, 46);
+    g.fillStyle = '#ffd84a';
+    g.fillText(`\u2726 ${meta.state.stardust}`, 18, 66);
     // next planet (scaled-down preview)
+    g.fillStyle = 'rgba(255,255,255,0.6)';
     g.textAlign = 'right';
     g.fillText('NEXT', GAME_W - 18, 14);
     {
@@ -490,7 +630,20 @@ function render(now) {
       g.scale(s, s);
       drawPlanet(0, 0, 0, nextTier, 1);
       g.restore();
+      // FAR SIGHT unlock: show planet after next
+      if (meta.state.unlocks.next2) {
+        const pr2 = TIERS[nextTier2].r;
+        const s2 = Math.min(1, 14 / pr2);
+        g.save();
+        g.translate(GAME_W - 42, 104);
+        g.scale(s2, s2);
+        drawPlanet(0, 0, 0, nextTier2, 0.6);
+        g.restore();
+      }
     }
+    // power-up buttons (bottom corners)
+    if (undoLeft > 0) drawButton(10, GAME_H - 54, 96, 42, `\u21B6 UNDO`, useUndo, '#5f3dc4');
+    if (bombLeft > 0) drawButton(GAME_W - 106, GAME_H - 54, 96, 42, `\u2600 NOVA`, useBomb, '#e8590c');
     // combo
     if (combo > 1) {
       g.textAlign = 'center';
@@ -514,35 +667,75 @@ function render(now) {
     g.font = "20px 'Segoe UI', sans-serif";
     g.fillStyle = 'rgba(255,255,255,0.75)';
     g.fillText('Merge planets. Build the Sun.', GAME_W / 2, 465);
-    drawButton(GAME_W / 2 - 110, 520, 220, 64, 'PLAY', startGame, '#37b24d');
+    drawButton(GAME_W / 2 - 110, 500, 220, 64, 'PLAY', startGame, '#37b24d');
+    drawButton(GAME_W / 2 - 165, 585, 100, 46, 'SHOP', () => { overlay = 'shop'; }, '#5f3dc4');
+    drawButton(GAME_W / 2 - 50, 585, 100, 46, 'GOALS', () => { overlay = 'missions'; }, '#1971c2');
+    drawButton(GAME_W / 2 + 65, 585, 100, 46, 'DEX', () => { overlay = 'dex'; }, '#e8590c');
+    g.fillStyle = '#ffd84a';
+    g.font = "bold 20px 'Segoe UI', sans-serif";
+    g.fillText(`\u2726 ${meta.state.stardust} stardust`, GAME_W / 2, 665);
     if (best > 0) {
       g.fillStyle = 'rgba(255,255,255,0.6)';
       g.font = "16px 'Segoe UI', sans-serif";
-      g.fillText(`Best score: ${best}`, GAME_W / 2, 625);
+      g.fillText(`Best score: ${best}`, GAME_W / 2, 695);
+    }
+    if (dailyMsg) {
+      g.fillStyle = '#ffd84a';
+      g.font = "bold 16px 'Segoe UI', sans-serif";
+      g.fillText(`Daily bonus +${dailyMsg.amount}\u2726  (day ${dailyMsg.streak})`, GAME_W / 2, 725);
     }
   }
 
-  if (state === 'gameover') {
+  if (state === 'gameover' && !overlay) {
     g.fillStyle = 'rgba(5,8,18,0.7)';
     g.fillRect(0, 0, GAME_W, GAME_H);
     g.fillStyle = '#ff6b6b';
     g.textAlign = 'center'; g.textBaseline = 'middle';
     g.font = "bold 44px 'Segoe UI', sans-serif";
-    g.fillText('GAME OVER', GAME_W / 2, 240);
+    g.fillText('GAME OVER', GAME_W / 2, 210);
     g.fillStyle = '#fff';
     g.font = "bold 34px 'Segoe UI', sans-serif";
-    g.fillText(String(score), GAME_W / 2, 300);
+    g.fillText(String(score), GAME_W / 2, 270);
     g.font = "16px 'Segoe UI', sans-serif";
     g.fillStyle = 'rgba(255,255,255,0.65)';
-    g.fillText(score >= best && score > 0 ? 'NEW BEST!' : `Best: ${best}`, GAME_W / 2, 340);
-    let by = 400;
+    g.fillText(score >= best && score > 0 ? 'NEW BEST!' : `Best: ${best}`, GAME_W / 2, 310);
+    g.fillStyle = '#ffd84a';
+    g.fillText(`+${stardustEarned}\u2726 stardust earned`, GAME_W / 2, 340);
+    let by = 385;
     if (!usedSecondChance && planets.length > 4 && performance.now() - gameOverAt > 600) {
-      drawButton(GAME_W / 2 - 150, by, 300, 60, '\u25B6 SECOND CHANCE (AD)', secondChance, '#f59f00');
-      by += 80;
+      drawButton(GAME_W / 2 - 150, by, 300, 56, '\u25B6 SECOND CHANCE (AD)', secondChance, '#f59f00');
+      by += 70;
     }
     if (performance.now() - gameOverAt > 600) {
-      drawButton(GAME_W / 2 - 110, by, 220, 60, 'PLAY AGAIN', restartWithAd, '#37b24d');
+      if (!doubledStardust && stardustEarned > 0) {
+        drawButton(GAME_W / 2 - 150, by, 300, 56, `\u25B6 DOUBLE \u2726 (AD)`, doubleStardust, '#5f3dc4');
+        by += 70;
+      }
+      drawButton(GAME_W / 2 - 110, by, 220, 56, 'PLAY AGAIN', restartWithAd, '#37b24d');
+      by += 70;
+      drawButton(GAME_W / 2 - 110, by, 220, 44, 'SHOP', () => { overlay = 'shop'; }, '#5f3dc4');
     }
+  }
+
+  if (overlay) renderOverlay();
+
+  // toasts (mission complete / daily bonus)
+  {
+    let ty = 100;
+    for (const t of toasts) {
+      g.globalAlpha = Math.min(1, t.life);
+      g.fillStyle = 'rgba(20,26,53,0.92)';
+      g.font = "bold 17px 'Segoe UI', sans-serif";
+      const w = g.measureText(t.text).width + 36;
+      roundRect(GAME_W / 2 - w / 2, ty, w, 36, 10);
+      g.fill();
+      g.strokeStyle = '#ffd84a'; g.lineWidth = 1.5; g.stroke();
+      g.fillStyle = '#ffd84a';
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(t.text, GAME_W / 2, ty + 19);
+      ty += 44;
+    }
+    g.globalAlpha = 1;
   }
 
   if (state === 'adplaying') {
@@ -555,13 +748,137 @@ function render(now) {
   }
 }
 
-// ---------- Boot ----------
+// ---------- Overlays: shop / missions / dex ----------
+function renderOverlay() {
+  g.fillStyle = 'rgba(5,8,18,0.88)';
+  g.fillRect(0, 0, GAME_W, GAME_H);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+
+  if (overlay === 'shop') {
+    g.fillStyle = '#fff';
+    g.font = "bold 34px 'Segoe UI', sans-serif";
+    g.fillText('SHOP', GAME_W / 2, 60);
+    g.fillStyle = '#ffd84a';
+    g.font = "bold 20px 'Segoe UI', sans-serif";
+    g.fillText(`\u2726 ${meta.state.stardust}`, GAME_W / 2, 100);
+    let y = 140;
+    for (const item of meta.SHOP_ITEMS) {
+      const owned = meta.state.unlocks[item.id];
+      const afford = meta.state.stardust >= item.cost;
+      g.textAlign = 'left';
+      g.fillStyle = '#fff';
+      g.font = "bold 18px 'Segoe UI', sans-serif";
+      g.fillText(item.name, 30, y + 18);
+      g.fillStyle = 'rgba(255,255,255,0.55)';
+      g.font = "14px 'Segoe UI', sans-serif";
+      g.fillText(item.desc, 30, y + 40);
+      if (owned) {
+        const isSkin = item.id === 'neon' || item.id === 'nova';
+        if (isSkin) {
+          const active = meta.state.skin === item.id;
+          drawButton(GAME_W - 150, y + 4, 120, 44, active ? 'ACTIVE' : 'EQUIP',
+            () => { meta.setSkin(active ? 'classic' : item.id); }, active ? '#37b24d' : '#4a6cf0');
+        } else {
+          g.textAlign = 'right';
+          g.fillStyle = '#37b24d';
+          g.font = "bold 16px 'Segoe UI', sans-serif";
+          g.fillText('OWNED', GAME_W - 30, y + 26);
+        }
+      } else {
+        drawButton(GAME_W - 150, y + 4, 120, 44, `${item.cost}\u2726`,
+          () => { if (meta.buy(item.id)) { audio.bigMergeSound(); toast(`Unlocked: ${item.name}!`); if (state === 'playing') { undoLeft = meta.state.unlocks.undo ? Math.max(undoLeft, 1) : 0; bombLeft = meta.state.unlocks.bomb ? Math.max(bombLeft, 1) : 0; } } else audio.warnSound(); },
+          afford ? '#f59f00' : '#555b70');
+      }
+      y += 78;
+    }
+  }
+
+  if (overlay === 'missions') {
+    g.fillStyle = '#fff';
+    g.font = "bold 34px 'Segoe UI', sans-serif";
+    g.fillText('GOALS', GAME_W / 2, 56);
+    const list = meta.missionList(score);
+    let y = 100;
+    g.font = "15px 'Segoe UI', sans-serif";
+    for (const m of list) {
+      g.textAlign = 'left';
+      g.fillStyle = m.done ? '#37b24d' : 'rgba(255,255,255,0.85)';
+      g.fillText(`${m.done ? '\u2713' : '\u25CB'}  ${m.label}`, 36, y);
+      g.textAlign = 'right';
+      g.fillStyle = m.done ? 'rgba(255,255,255,0.35)' : '#ffd84a';
+      g.fillText(`+${m.reward}\u2726`, GAME_W - 36, y);
+      y += 38;
+    }
+  }
+
+  if (overlay === 'dex') {
+    g.fillStyle = '#fff';
+    g.font = "bold 34px 'Segoe UI', sans-serif";
+    g.fillText('PLANET DEX', GAME_W / 2, 56);
+    const cols = 3;
+    for (let i = 0; i < TIERS.length; i++) {
+      const cx = GAME_W / 2 + (i % cols - 1) * 150;
+      const cy = 150 + Math.floor(i / cols) * 140;
+      const count = meta.state.dex[i] || 0;
+      const known = count > 0 || i <= MAX_DROP_TIER;
+      const s = Math.min(1, 38 / TIERS[i].r);
+      g.save();
+      g.translate(cx, cy);
+      g.scale(s, s);
+      if (known) drawPlanet(0, 0, 0, i, 1);
+      else {
+        g.fillStyle = 'rgba(255,255,255,0.08)';
+        g.beginPath(); g.arc(0, 0, TIERS[i].r, 0, Math.PI * 2); g.fill();
+        g.fillStyle = 'rgba(255,255,255,0.4)';
+        g.font = `bold ${TIERS[i].r}px 'Segoe UI', sans-serif`;
+        g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillText('?', 0, 0);
+      }
+      g.restore();
+      g.fillStyle = known ? '#fff' : 'rgba(255,255,255,0.35)';
+      g.font = "bold 14px 'Segoe UI', sans-serif";
+      g.textAlign = 'center';
+      g.fillText(known ? TIERS[i].name : '???', cx, cy + 52);
+      if (count > 0) {
+        g.fillStyle = 'rgba(255,255,255,0.5)';
+        g.font = "12px 'Segoe UI', sans-serif";
+        g.fillText(`\u00D7${count}`, cx, cy + 68);
+      }
+    }
+  }
+
+  drawButton(GAME_W / 2 - 80, GAME_H - 70, 160, 50, 'BACK', () => { overlay = null; }, '#4a6cf0');
+}
+
+
 // debug hooks for QA (harmless in prod)
 if (location.search.includes('debug=1')) {
   window.__astro = {
     forceGameOver: () => gameOver(),
-    getState: () => ({ state, score, planets: planets.length }),
+    getState: () => ({
+      state, score, planets: planets.length, overlay,
+      stardust: meta.state.stardust, unlocks: { ...meta.state.unlocks },
+      skin: meta.state.skin, streak: meta.state.streak,
+      missionsDone: Object.keys(meta.state.missionsDone).length,
+      totalRuns: meta.state.totalRuns, totalMerges: meta.state.totalMerges,
+      undoLeft, bombLeft, stardustEarned,
+    }),
     addScore: (n) => { score += n; },
+    addStardust: (n) => { meta.addStardust(n); meta.save(); },
+    buy: (id) => meta.buy(id),
+    setSkin: (id) => meta.setSkin(id),
+    openOverlay: (o) => { overlay = o; },
+    closeOverlay: () => { overlay = null; },
+    meta: meta.state,
+    spawn: (tier, x, y) => spawnPlanet(tier, x ?? GAME_W / 2, y ?? 200),
+    useUndo,
+    useBomb,
+    pressButton: (substr) => {
+      const b = buttons.find(b => b.label && b.label.includes(substr));
+      if (b) { b.fn(); return true; }
+      return false;
+    },
+    buttons: () => buttons.map(b => b.label),
   };
 }
 
@@ -569,8 +886,15 @@ if (location.search.includes('debug=1')) {
   await cg.initSDK();
   cg.loadingStart();
   best = cg.loadBest();
+  dailyMsg = meta.load();
+  if (dailyMsg) toast(`Daily bonus +${dailyMsg.amount}\u2726 (day ${dailyMsg.streak})`);
   audio.setMuted(cg.getMuteSetting());
   cg.onSettingsChange(s => audio.setMuted(!!s.muteAudio));
   cg.loadingStop && cg.loadingStop();
+  // flush pending meta saves periodically + on tab close (never lose progress)
+  setInterval(() => meta.flushIfDirty(), 5000);
+  window.addEventListener('beforeunload', () => meta.flushIfDirty());
+  document.addEventListener('visibilitychange', () => { if (document.hidden) meta.flushIfDirty(); });
+  window.__astroReady = true;
   requestAnimationFrame(frame);
 })();

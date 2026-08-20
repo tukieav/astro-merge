@@ -64,6 +64,24 @@ export function onSettingsChange(fn) {
   try { if (sdk) sdk.game.addSettingsChangeListener(fn); } catch (e) {}
 }
 
+// Generic persistent JSON data: SDK data module (cross-device) with localStorage fallback
+export function loadData(key) {
+  let raw = null;
+  try { if (sdk) raw = sdk.data.getItem('astromerge.' + key); } catch (e) {}
+  if (raw == null) {
+    try { raw = localStorage.getItem('astromerge.' + key); } catch (e) {}
+  }
+  if (raw == null) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }
+}
+
+export function saveData(key, obj) {
+  let raw;
+  try { raw = JSON.stringify(obj); } catch (e) { return; }
+  try { if (sdk) sdk.data.setItem('astromerge.' + key, raw); } catch (e) {}
+  try { localStorage.setItem('astromerge.' + key, raw); } catch (e) {}
+}
+
 // Persistent best score: SDK data module (cross-device) with localStorage fallback
 export function loadBest() {
   try {
