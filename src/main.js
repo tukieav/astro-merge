@@ -5,6 +5,7 @@ import Matter from 'matter-js';
 import * as audio from './audio.js';
 import * as cg from './sdk.js';
 import * as meta from './meta.js';
+import * as art from './art.js';
 
 const { Engine, World, Bodies, Body, Events, Composite } = Matter;
 
@@ -31,6 +32,8 @@ const TIERS = [
   { name: 'Sun',     r: 154, c1: '#fff0a0', c2: '#f08000', score: 100, glow: true },
 ];
 const MAX_DROP_TIER = 4; // player only drops tiers 0..4
+
+art.initArt(TIERS, GAME_W, GAME_H);
 
 // ---------- Canvas setup ----------
 const canvas = document.getElementById('game');
@@ -62,6 +65,9 @@ World.add(engine.world, [
 // ---------- Game state ----------
 let planets = [];        // { body, tier, born, aboveSince }
 let particles = [];
+let rings = [];          // merge shockwave rings { x, y, r, r1, life, color, lw }
+let flashes = [];        // merge flash { x, y, r, life }
+let sparkles = [];       // star-shaped stardust { x, y, vx, vy, r, life, rot }
 let floatTexts = [];
 let stars = [];
 let score = 0;
@@ -135,7 +141,7 @@ function spawnPlanet(tier, x, y, vx = 0, vy = 0) {
   Body.setVelocity(body, { x: vx, y: vy });
   Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.05);
   World.add(engine.world, body);
-  const p = { body, tier, born: performance.now(), aboveSince: 0 };
+  const p = { body, tier, born: performance.now(), aboveSince: 0, pop: 0, sq: 0, sqT: 0, landed: false };
   planets.push(p);
   return p;
 }
@@ -144,6 +150,7 @@ function reset() {
   for (const p of planets) World.remove(engine.world, p.body);
   planets = [];
   particles = [];
+  rings = []; flashes = []; sparkles = [];
   floatTexts = [];
   score = 0; combo = 0; comboTimer = 0; mergesThisRun = 0;
   usedSecondChance = false;
@@ -186,7 +193,8 @@ function processMerges() {
     World.remove(engine.world, a.body);
     World.remove(engine.world, b.body);
     planets = planets.filter(p => p !== a && p !== b);
-    spawnPlanet(nt, mx, my);
+    const np = spawnPlanet(nt, mx, my);
+    np.pop = 1; // spawn pop animation
     // scoring & combo
     combo++;
     comboTimer = 1.6;
@@ -207,9 +215,9 @@ function processMerges() {
       cg.happytime();
     }
     // fx
-    burstParticles(mx, my, TIERS[nt].c1, TIERS[nt].r);
+    mergeFX(mx, my, nt, combo);
     floatTexts.push({ x: mx, y: my - TIERS[nt].r, text: `+${gained}${combo > 1 ? '  x' + combo : ''}`, life: 1.2, big: combo > 2 });
-    shake = Math.min(10, 2 + nt * 0.8);
+    shake = Math.min(16, 2 + nt * 0.8 + (combo >= 5 ? 6 + combo : 0));
     if (nt >= 8) { audio.bigMergeSound(); cg.happytime(); }
     else audio.popSound(nt, combo);
   }
@@ -224,6 +232,35 @@ function burstParticles(x, y, color, radius) {
     particles.push({
       x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1.5,
       r: 2 + Math.random() * 4, color, life: 0.6 + Math.random() * 0.5,
+    });
+  }
+}
+
+// full merge juice: flash + expanding ring + colored particles + stardust sparkles
+function mergeFX(x, y, tier, comboN) {
+  const t = TIERS[tier];
+  const boost = 1 + Math.min(1.6, (comboN - 1) * 0.22);
+  flashes.push({ x, y, r: t.r * 1.5 * boost, life: 1 });
+  rings.push({ x, y, r: t.r * 0.5, r1: t.r * (2.1 + 0.4 * boost), life: 1, color: t.c1, lw: 3 + tier * 0.4 });
+  if (comboN >= 3) rings.push({ x, y, r: t.r * 0.3, r1: t.r * (3 + boost), life: 1, color: '#ffd84a', lw: 2 });
+  const n = Math.min(40, Math.floor((12 + t.r / 6) * boost));
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = (2 + Math.random() * 5.5) * boost;
+    particles.push({
+      x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1.5,
+      r: 2 + Math.random() * 4, color: Math.random() < 0.7 ? t.c1 : t.c2,
+      life: 0.6 + Math.random() * 0.6,
+    });
+  }
+  const ns = Math.min(14, 4 + tier + comboN);
+  for (let i = 0; i < ns; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 1.5 + Math.random() * 3.5;
+    sparkles.push({
+      x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2.2,
+      r: 2 + Math.random() * 3, life: 0.8 + Math.random() * 0.6,
+      rot: Math.random() * Math.PI,
     });
   }
 }
@@ -429,68 +466,22 @@ function checkDanger(now) {
 }
 
 // ---------- Drawing ----------
-function drawPlanet(x, y, angle, tier, alpha = 1) {
+function drawPlanet(x, y, angle, tier, alpha = 1, sx = 1, sy = 1, now = 0) {
   const t = TIERS[tier];
   const pal = SKINS[meta.state.skin];
   const c1 = pal ? pal[tier][0] : t.c1;
   const c2 = pal ? pal[tier][1] : t.c2;
+  const sprite = art.getPlanetSprite(tier, c1, c2);
   g.save();
   g.translate(x, y);
-  g.rotate(angle);
+  g.scale(sx, sy);
   g.globalAlpha = alpha;
-  if (t.glow) {
-    const gl = g.createRadialGradient(0, 0, t.r * 0.6, 0, 0, t.r * 1.6);
-    gl.addColorStop(0, 'rgba(255,200,60,0.55)');
-    gl.addColorStop(1, 'rgba(255,120,0,0)');
-    g.fillStyle = gl;
-    g.beginPath(); g.arc(0, 0, t.r * 1.6, 0, Math.PI * 2); g.fill();
-  }
-  const grad = g.createRadialGradient(-t.r * 0.35, -t.r * 0.35, t.r * 0.1, 0, 0, t.r);
-  grad.addColorStop(0, c1);
-  grad.addColorStop(1, c2);
-  g.fillStyle = grad;
-  g.beginPath(); g.arc(0, 0, t.r, 0, Math.PI * 2); g.fill();
-  // craters / details
-  if (tier <= 3) {
-    g.fillStyle = 'rgba(0,0,0,0.15)';
-    for (let i = 0; i < 3; i++) {
-      const a = i * 2.1 + tier;
-      g.beginPath();
-      g.arc(Math.cos(a) * t.r * 0.45, Math.sin(a) * t.r * 0.45, t.r * 0.16, 0, Math.PI * 2);
-      g.fill();
-    }
-  }
-  if (t.bands) {
-    g.strokeStyle = 'rgba(120,60,20,0.35)';
-    g.lineWidth = t.r * 0.12;
-    for (let i = -2; i <= 2; i++) {
-      g.beginPath();
-      g.ellipse(0, i * t.r * 0.3, t.r * Math.sqrt(1 - Math.pow(i * 0.3, 2)) * 0.97, t.r * 0.1, 0, 0, Math.PI * 2);
-      g.stroke();
-    }
-    // red spot
-    g.fillStyle = 'rgba(200,70,40,0.6)';
-    g.beginPath(); g.ellipse(t.r * 0.35, t.r * 0.25, t.r * 0.2, t.r * 0.12, 0.3, 0, Math.PI * 2); g.fill();
-  }
-  if (tier === 5) { // Earth continents
-    g.fillStyle = 'rgba(60,160,70,0.8)';
-    g.beginPath(); g.ellipse(-t.r * 0.25, -t.r * 0.15, t.r * 0.3, t.r * 0.22, 0.5, 0, Math.PI * 2); g.fill();
-    g.beginPath(); g.ellipse(t.r * 0.3, t.r * 0.3, t.r * 0.22, t.r * 0.15, -0.4, 0, Math.PI * 2); g.fill();
-    g.fillStyle = 'rgba(255,255,255,0.35)';
-    g.beginPath(); g.ellipse(t.r * 0.1, -t.r * 0.4, t.r * 0.35, t.r * 0.1, 0.2, 0, Math.PI * 2); g.fill();
-  }
-  if (t.ring) {
-    g.strokeStyle = 'rgba(220,190,130,0.9)';
-    g.lineWidth = t.r * 0.14;
-    g.beginPath(); g.ellipse(0, 0, t.r * 1.45, t.r * 0.4, -0.35, 0, Math.PI * 2); g.stroke();
-    g.strokeStyle = 'rgba(160,130,80,0.5)';
-    g.lineWidth = t.r * 0.06;
-    g.beginPath(); g.ellipse(0, 0, t.r * 1.62, t.r * 0.46, -0.35, 0, Math.PI * 2); g.stroke();
-  }
-  // rim light
-  g.strokeStyle = 'rgba(255,255,255,0.18)';
-  g.lineWidth = 2;
-  g.beginPath(); g.arc(0, 0, t.r - 1, 0, Math.PI * 2); g.stroke();
+  // subtle texture rotation (slow spin, rings/glow stay baked upright)
+  g.rotate(angle * 0.35);
+  const hs = sprite.half * sprite.scale;
+  g.drawImage(sprite.canvas, -hs, -hs, hs * 2, hs * 2);
+  g.rotate(-angle * 0.35);
+  if (t.glow && now) art.drawSunCorona(g, 0, 0, t.r, now);
   g.restore();
 }
 
@@ -505,16 +496,7 @@ function roundRect(x, y, w, h, r) {
 }
 
 function drawButton(x, y, w, h, text, fn, color = '#4a6cf0') {
-  roundRect(x, y, w, h, 14);
-  g.fillStyle = color;
-  g.fill();
-  g.strokeStyle = 'rgba(255,255,255,0.3)';
-  g.lineWidth = 2;
-  g.stroke();
-  g.fillStyle = '#fff';
-  g.font = `bold ${Math.floor(h * 0.42)}px 'Segoe UI', sans-serif`;
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText(text, x + w / 2, y + h / 2 + 1);
+  art.neonButton(g, x, y, w, h, text, color);
   buttons.push({ x, y, w, h, fn, label: text });
 }
 
@@ -530,6 +512,19 @@ function frame(now) {
     processMerges();
     checkDanger(now);
     if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) combo = 0; }
+    // squash & stretch on landing: detect first solid contact
+    for (const p of planets) {
+      if (!p.landed && now - p.born > 80) {
+        const vy = p.body.velocity.y;
+        if (p.maxVy === undefined) p.maxVy = 0;
+        p.maxVy = Math.max(p.maxVy, vy);
+        if (p.maxVy > 4 && vy < 1.2) {
+          p.landed = true;
+          p.sq = Math.min(0.30, p.maxVy * 0.025);
+          p.sqT = now;
+        }
+      }
+    }
   }
 
   // update particles / texts
@@ -537,6 +532,14 @@ function frame(now) {
     p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= dt * 1.4;
   }
   particles = particles.filter(p => p.life > 0);
+  for (const r of rings) r.life -= dt * 2.2;
+  rings = rings.filter(r => r.life > 0);
+  for (const f of flashes) f.life -= dt * 4.5;
+  flashes = flashes.filter(f => f.life > 0);
+  for (const s of sparkles) {
+    s.x += s.vx; s.y += s.vy; s.vy += 0.08; s.life -= dt * 1.2; s.rot += dt * 4;
+  }
+  sparkles = sparkles.filter(s => s.life > 0);
   for (const f of floatTexts) { f.y -= 40 * dt; f.life -= dt; }
   floatTexts = floatTexts.filter(f => f.life > 0);
   for (const t of toasts) t.life -= dt;
@@ -552,31 +555,75 @@ function render(now) {
   if (shake > 0) g.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
 
   // background
-  const bg = g.createLinearGradient(0, 0, 0, GAME_H);
-  bg.addColorStop(0, '#0b0e1a');
-  bg.addColorStop(1, '#141a35');
-  g.fillStyle = bg;
-  g.fillRect(-10, -10, GAME_W + 20, GAME_H + 20);
-  for (const s of stars) {
-    const tw = 0.4 + 0.6 * Math.abs(Math.sin(now / 900 + s.tw));
-    g.fillStyle = `rgba(255,255,255,${tw * 0.8})`;
-    g.beginPath(); g.arc(s.x, s.y, s.r, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#05070f';
+  g.fillRect(-14, -14, GAME_W + 28, GAME_H + 28);
+  art.drawBackground(g, now);
+
+  // glass container (space station walls)
+  if (state === 'playing' || state === 'gameover' || state === 'dropping') {
+    art.drawContainer(g, now);
   }
 
-  // danger line
+  // danger line — pulsing laser
   if (state === 'playing' || state === 'gameover') {
-    const pulse = 0.25 + dangerPulse * 0.55 * (0.6 + 0.4 * Math.sin(now / 120));
-    g.strokeStyle = `rgba(255,70,70,${pulse})`;
-    g.lineWidth = 3;
-    g.setLineDash([12, 10]);
-    g.beginPath(); g.moveTo(0, DANGER_Y); g.lineTo(GAME_W, DANGER_Y); g.stroke();
-    g.setLineDash([]);
+    art.drawLaserLine(g, DANGER_Y, now, dangerPulse);
   }
 
   // planets
   for (const p of planets) {
-    drawPlanet(p.body.position.x, p.body.position.y, p.body.angle, p.tier);
+    // spawn pop: overshoot scale-in on merge result
+    if (p.pop > 0) p.pop = Math.max(0, p.pop - 0.09);
+    const pop = p.pop > 0 ? 1 + Math.sin((1 - p.pop) * Math.PI) * 0.22 : 1;
+    // squash & stretch after landing (decaying bounce)
+    let sqx = 1, sqy = 1;
+    if (p.sq > 0) {
+      const el = (now - p.sqT) / 260;
+      if (el < 1) {
+        const k = p.sq * (1 - el) * Math.cos(el * Math.PI * 2);
+        sqx = 1 + k; sqy = 1 - k;
+      } else p.sq = 0;
+    }
+    drawPlanet(p.body.position.x, p.body.position.y, p.body.angle, p.tier, 1, pop * sqx, pop * sqy, now);
   }
+
+  // merge FX: flashes (additive), rings, sparkles
+  g.save();
+  g.globalCompositeOperation = 'lighter';
+  for (const f of flashes) {
+    const grad = g.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r * (1.3 - f.life * 0.3));
+    grad.addColorStop(0, `rgba(255,255,255,${(f.life * 0.85).toFixed(2)})`);
+    grad.addColorStop(0.4, `rgba(255,240,190,${(f.life * 0.4).toFixed(2)})`);
+    grad.addColorStop(1, 'rgba(255,220,120,0)');
+    g.fillStyle = grad;
+    g.beginPath(); g.arc(f.x, f.y, f.r * 1.3, 0, Math.PI * 2); g.fill();
+  }
+  for (const r of rings) {
+    const t = 1 - r.life;
+    const rr = r.r + (r.r1 - r.r) * (1 - Math.pow(1 - t, 3));
+    g.globalAlpha = r.life * 0.85;
+    g.strokeStyle = r.color;
+    g.lineWidth = r.lw * r.life + 0.5;
+    g.beginPath(); g.arc(r.x, r.y, rr, 0, Math.PI * 2); g.stroke();
+  }
+  g.globalAlpha = 1;
+  for (const s of sparkles) {
+    g.globalAlpha = Math.min(1, s.life);
+    g.fillStyle = '#ffe9a0';
+    g.save();
+    g.translate(s.x, s.y); g.rotate(s.rot);
+    // 4-point star
+    g.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const rr = i % 2 ? s.r * 0.36 : s.r;
+      const a = (i / 8) * Math.PI * 2;
+      if (i === 0) g.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      else g.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    g.closePath(); g.fill();
+    g.restore();
+  }
+  g.globalAlpha = 1;
+  g.restore();
 
   // particles
   for (const p of particles) {
@@ -599,29 +646,38 @@ function render(now) {
   if (state === 'playing') {
     // drop preview
     if (canDrop) {
-      g.globalAlpha = 0.35;
-      g.strokeStyle = '#fff';
-      g.lineWidth = 1.5;
-      g.setLineDash([6, 8]);
-      g.beginPath(); g.moveTo(dropX, DROP_Y); g.lineTo(dropX, GAME_H - 20); g.stroke();
+      // soft beam trail under the held planet
+      const tr = TIERS[currentTier].r;
+      const beam = g.createLinearGradient(0, DROP_Y, 0, GAME_H - 20);
+      beam.addColorStop(0, 'rgba(150,200,255,0.10)');
+      beam.addColorStop(1, 'rgba(150,200,255,0.01)');
+      g.fillStyle = beam;
+      g.fillRect(dropX - tr * 0.45, DROP_Y, tr * 0.9, GAME_H - 20 - DROP_Y);
+      g.strokeStyle = 'rgba(180,220,255,0.30)';
+      g.lineWidth = 1;
+      g.setLineDash([6, 10]);
+      g.beginPath(); g.moveTo(dropX, DROP_Y + tr); g.lineTo(dropX, GAME_H - 20); g.stroke();
       g.setLineDash([]);
-      g.globalAlpha = 1;
-      drawPlanet(dropX, DROP_Y, 0, currentTier, 0.9);
+      // gentle bob while aiming
+      const bob = Math.sin(now / 300) * 2;
+      drawPlanet(dropX, DROP_Y + bob, 0, currentTier, 0.95, 1, 1, now);
     }
     // HUD
+    art.glassPanel(g, 10, 8, 150, 84, 12);
     g.fillStyle = '#fff';
     g.font = "bold 30px 'Segoe UI', sans-serif";
     g.textAlign = 'left'; g.textBaseline = 'top';
-    g.fillText(String(score), 18, 12);
+    g.fillText(String(score), 22, 14);
     g.font = "14px 'Segoe UI', sans-serif";
     g.fillStyle = 'rgba(255,255,255,0.6)';
-    g.fillText(`BEST ${Math.max(best, score)}`, 18, 46);
+    g.fillText(`BEST ${Math.max(best, score)}`, 22, 48);
     g.fillStyle = '#ffd84a';
-    g.fillText(`\u2726 ${meta.state.stardust}`, 18, 66);
+    g.fillText(`\u2726 ${meta.state.stardust}`, 22, 68);
     // next planet (scaled-down preview)
+    art.glassPanel(g, GAME_W - 78, 8, 68, meta.state.unlocks.next2 ? 118 : 84, 12);
     g.fillStyle = 'rgba(255,255,255,0.6)';
     g.textAlign = 'right';
-    g.fillText('NEXT', GAME_W - 18, 14);
+    g.fillText('NEXT', GAME_W - 24, 16);
     {
       const pr = TIERS[nextTier].r;
       const s = Math.min(1, 22 / pr);
@@ -647,23 +703,63 @@ function render(now) {
     // combo
     if (combo > 1) {
       g.textAlign = 'center';
-      g.fillStyle = '#ffd84a';
-      g.font = "bold 26px 'Segoe UI', sans-serif";
-      g.fillText(`COMBO x${combo}`, GAME_W / 2, 14);
+      const cs = 26 + Math.min(18, combo * 2.4);
+      g.save();
+      g.shadowColor = combo >= 5 ? '#ff8c3a' : '#ffd84a';
+      g.shadowBlur = 8 + combo * 2;
+      g.fillStyle = combo >= 5 ? '#ffb03a' : '#ffd84a';
+      g.font = `bold ${cs | 0}px 'Segoe UI', sans-serif`;
+      const wob = combo >= 4 ? Math.sin(now / 60) * (combo * 0.4) : 0;
+      g.fillText(`COMBO x${combo}`, GAME_W / 2 + wob, 14);
+      g.restore();
     }
   }
 
   if (state === 'menu') {
-    g.fillStyle = 'rgba(5,8,18,0.55)';
+    g.fillStyle = 'rgba(4,6,15,0.45)';
     g.fillRect(0, 0, GAME_W, GAME_H);
-    // title planets decoration
-    drawPlanet(GAME_W / 2 - 130, 200, 0.4, 5, 1);
-    drawPlanet(GAME_W / 2 + 120, 170, -0.3, 8, 1);
-    drawPlanet(GAME_W / 2, 300, 0.1, 3, 1);
+    // animated mini solar system: sun + orbiting planets
+    {
+      const scx = GAME_W / 2, scy = 235;
+      g.save();
+      g.translate(scx, scy);
+      g.scale(0.5, 0.5);
+      drawPlanet(0, 0, 0, 10, 1, 1, 1, now);
+      g.restore();
+      const orbits = [
+        { tier: 5, d: 155, sp: 0.00022, ph: 0 },
+        { tier: 8, d: 215, sp: 0.00013, ph: 2.2 },
+        { tier: 3, d: 118, sp: 0.00034, ph: 4.1 },
+      ];
+      for (const o of orbits) {
+        g.strokeStyle = 'rgba(150,190,255,0.10)';
+        g.lineWidth = 1;
+        g.beginPath(); g.ellipse(scx, scy, o.d, o.d * 0.38, 0, 0, Math.PI * 2); g.stroke();
+        const a = now * o.sp + o.ph;
+        const px = scx + Math.cos(a) * o.d;
+        const py = scy + Math.sin(a) * o.d * 0.38;
+        const sc = 0.42 + 0.10 * Math.sin(a); // fake depth
+        g.save();
+        g.translate(px, py);
+        g.scale(sc, sc);
+        drawPlanet(0, 0, now * 0.0004, o.tier, 1);
+        g.restore();
+      }
+    }
+    g.save();
+    g.shadowColor = '#6a8dff';
+    g.shadowBlur = 26;
     g.fillStyle = '#fff';
     g.textAlign = 'center'; g.textBaseline = 'middle';
     g.font = "bold 54px 'Segoe UI', sans-serif";
     g.fillText('ASTRO MERGE', GAME_W / 2, 420);
+    g.shadowBlur = 0;
+    const tg = g.createLinearGradient(0, 400, 0, 445);
+    tg.addColorStop(0, 'rgba(255,255,255,0)');
+    tg.addColorStop(1, 'rgba(110,150,255,0.35)');
+    g.fillStyle = tg;
+    g.fillText('ASTRO MERGE', GAME_W / 2, 420);
+    g.restore();
     g.font = "20px 'Segoe UI', sans-serif";
     g.fillStyle = 'rgba(255,255,255,0.75)';
     g.fillText('Merge planets. Build the Sun.', GAME_W / 2, 465);
@@ -689,10 +785,15 @@ function render(now) {
   if (state === 'gameover' && !overlay) {
     g.fillStyle = 'rgba(5,8,18,0.7)';
     g.fillRect(0, 0, GAME_W, GAME_H);
+    art.glassPanel(g, GAME_W / 2 - 175, 160, 350, 210, 18);
+    g.save();
+    g.shadowColor = '#ff5050';
+    g.shadowBlur = 18;
     g.fillStyle = '#ff6b6b';
     g.textAlign = 'center'; g.textBaseline = 'middle';
     g.font = "bold 44px 'Segoe UI', sans-serif";
     g.fillText('GAME OVER', GAME_W / 2, 210);
+    g.restore();
     g.fillStyle = '#fff';
     g.font = "bold 34px 'Segoe UI', sans-serif";
     g.fillText(String(score), GAME_W / 2, 270);
@@ -755,9 +856,12 @@ function renderOverlay() {
   g.textAlign = 'center'; g.textBaseline = 'middle';
 
   if (overlay === 'shop') {
+    g.save();
+    g.shadowColor = '#8f6dff'; g.shadowBlur = 14;
     g.fillStyle = '#fff';
     g.font = "bold 34px 'Segoe UI', sans-serif";
     g.fillText('SHOP', GAME_W / 2, 60);
+    g.restore();
     g.fillStyle = '#ffd84a';
     g.font = "bold 20px 'Segoe UI', sans-serif";
     g.fillText(`\u2726 ${meta.state.stardust}`, GAME_W / 2, 100);
@@ -765,6 +869,7 @@ function renderOverlay() {
     for (const item of meta.SHOP_ITEMS) {
       const owned = meta.state.unlocks[item.id];
       const afford = meta.state.stardust >= item.cost;
+      art.glassPanel(g, 16, y - 8, GAME_W - 32, 66, 12);
       g.textAlign = 'left';
       g.fillStyle = '#fff';
       g.font = "bold 18px 'Segoe UI', sans-serif";
@@ -886,8 +991,7 @@ if (location.search.includes('debug=1')) {
   await cg.initSDK();
   cg.loadingStart();
   best = cg.loadBest();
-  dailyMsg = meta.load();
-  if (dailyMsg) toast(`Daily bonus +${dailyMsg.amount}\u2726 (day ${dailyMsg.streak})`);
+  dailyMsg = meta.load(); // shown in menu; no duplicate toast
   audio.setMuted(cg.getMuteSetting());
   cg.onSettingsChange(s => audio.setMuted(!!s.muteAudio));
   cg.loadingStop && cg.loadingStop();
