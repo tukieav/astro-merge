@@ -1,7 +1,8 @@
 import { chromium } from 'playwright';
+const URL = process.env.ASTRO_MERGE_URL || 'http://localhost:8524/index.html';
 const browser = await chromium.launch({ headless: true, executablePath: '/usr/bin/google-chrome' });
 const page = await browser.newPage({ viewport: { width: 600, height: 880 } });
-await page.goto('http://localhost:8524/index.html?debug=1', { waitUntil: 'load' });
+await page.goto(URL + '?debug=1', { waitUntil: 'load' });
 await page.waitForFunction(() => window.__astroReady === true);
 await page.waitForTimeout(800);
 await page.screenshot({ path: '/tmp/qa-menu.png' });

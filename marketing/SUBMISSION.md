@@ -70,3 +70,9 @@ All ages; designed for 10–16. No violence, no blood, no text chat, no user con
 - **Dynamic difficulty**: easier planet distribution for first 2 minutes of each run.
 - **Keyboard controls** on desktop (arrows + space).
 - **Rewarded ad: DOUBLE stardust** after each run, in addition to Second Chance.
+
+## Desktop presentation update (v1.2)
+- Full-viewport responsive Canvas 2D scene with DPR-aware rendering; no portrait letterboxing on landscape browsers.
+- Portrait merge chamber is integrated into a space-station frame, with mission/stardust/dex telemetry on the left and upcoming planets, combo state and one-click access on the right.
+- First-action cue guarantees a quick first merge without a text-heavy tutorial. Portrait controls retain 44px-or-larger touch targets.
+- Refreshed 16:9 screenshots and `marketing/video-landscape.mp4` show the native desktop composition.

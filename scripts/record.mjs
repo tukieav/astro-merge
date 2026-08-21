@@ -1,5 +1,6 @@
 // Record gameplay preview videos: landscape 1280x720 and portrait 720x1280, <20s
 import { chromium } from 'playwright';
+const URL = process.env.ASTRO_MERGE_URL || 'http://localhost:8524/index.html';
 
 async function record(w, h, out) {
   const browser = await chromium.launch({ headless: true, executablePath: '/usr/bin/google-chrome' });
@@ -8,7 +9,7 @@ async function record(w, h, out) {
     recordVideo: { dir: '/tmp/amvid', size: { width: w, height: h } },
   });
   const page = await ctx.newPage();
-  await page.goto('http://localhost:8524/index.html?debug=1', { waitUntil: 'load' });
+  await page.goto(URL + '?debug=1', { waitUntil: 'load' });
   await page.waitForFunction(() => window.__astroReady === true);
   await page.waitForTimeout(1200); // menu with animated solar system
   const b = await page.locator('#game').boundingBox();

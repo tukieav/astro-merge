@@ -2,12 +2,13 @@
 // Covers = real gameplay screenshot as background + neon title.
 import { chromium } from 'playwright';
 import fs from 'fs';
+const URL = process.env.ASTRO_MERGE_URL || 'http://localhost:8524/index.html';
 
 const browser = await chromium.launch({ headless: true, executablePath: '/usr/bin/google-chrome' });
 
 // ---------- 1920x1080 screenshots ----------
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-await page.goto('http://localhost:8524/index.html?debug=1', { waitUntil: 'load' });
+await page.goto(URL + '?debug=1', { waitUntil: 'load' });
 await page.waitForFunction(() => window.__astroReady === true);
 await page.waitForTimeout(900);
 await page.screenshot({ path: 'marketing/screenshot-menu.png' });
