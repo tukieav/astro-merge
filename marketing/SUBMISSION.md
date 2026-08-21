@@ -1,78 +1,80 @@
-# Astro Merge — CrazyGames Submission Kit
-
-Wszystko poniżej wklejasz w formularz na https://developer.crazygames.com/
+# Astro Merge — CrazyGames submission kit
 
 ## Game name
+
 Astro Merge
 
-## Category
-Puzzle (secondary: Casual)
+## Taxonomy
 
-## Tags
-merge, physics, suika, watermelon, planets, space, drop, combo, relaxing, one-hand
+- Primary category: **Arcade** — `/c/arcade`
+- Secondary discovery paths: **Casual**, **Merge**
+- Verified portal tags: **Casual, Merge, Mobile, Relaxing, 2D, Mouse, Physics**
 
-## Short description (max ~140 chars)
-Drop and merge planets to build the Sun! A cosmic physics puzzle with combos, chain reactions and endless "one more try" fun.
+## Short description (154 characters)
+
+Drop matching planets, trigger cosmic chain reactions, and grow a tiny Pluto into the Sun in this polished physics merge game.
 
 ## Full description
-Astro Merge is a cosmic twist on the beloved fruit-merge formula. Drop planets
-into the cosmic well — when two identical planets touch, they fuse into a
-bigger one: Pluto, Moon, Mercury, Mars, Venus, Earth, Neptune, Uranus, Saturn,
-Jupiter... and finally the mighty SUN!
 
-FEATURES
-- Satisfying physics: planets roll, bounce and stack realistically
-- Chain reactions and combo multipliers for massive scores
-- 11 hand-crafted planets, from tiny Pluto to the glowing Sun
-- Quick to learn, impossible to put down
-- Works great with mouse or touch — play with one hand
-- Your best score is saved across devices
+Build a solar system one drop at a time. Guide each planet into the orbital
+chamber and merge matching worlds into larger celestial bodies. Smart placement
+creates chain reactions, combo multipliers, and valuable Stardust.
 
-HOW TO PLAY
-1. Move your mouse (or finger) to aim
-2. Click / tap to drop the planet
-3. Merge identical planets to grow them
-4. Don't let the pile cross the red line!
-5. Build combos for multiplied points
+Complete mission goals, discover every planet in the DEX, unlock visual themes,
+and deploy tactical power-ups such as Undo Drop and Nova Bomb. Every run is
+quick to learn, but the crowded chamber creates increasingly difficult spatial
+decisions.
 
-Can you create the Sun?
+## Features
 
-## Controls text
-Move mouse / drag finger — aim. Click / tap — drop planet.
+- One-click entry into a useful first merge: an animated landing target, ghost
+  ring and contextual drop cue disappear after success.
+- Fixed 60Hz Matter physics with a 60/144/165Hz deterministic simulation gate.
+- Readable merges: magnetic anticipation, tier rings, chain paths, staggered
+  score labels, particles, sound and reduced-motion-safe feedback.
+- Pressure telegraphs show the offending zone and a 2.5-second grace countdown
+  before an explicit chamber-overload loss reason.
+- Persistent Stardust, DEX, missions, daily bonus, records, skins and purchased
+  power-ups. Versioned validation safely falls back from malformed/old local
+  data.
+- Owned Undo Drop and Nova Bomb remain visible in a run with remaining-use or
+  used state feedback.
+- Full-viewport desktop station presentation and responsive portrait chamber.
 
-## SDK integration notes (QA reviewer info)
-- HTML5 SDK v3, manual init before game start
-- gameplayStart/gameplayStop on play/game over/ad breaks
-- loadingStart/loadingStop around boot
-- Midgame ad on "Play Again" after game over
-- Rewarded ad "Second Chance" (clears 40% smallest planets, resumes run)
-- happytime() on big merges (Saturn tier and above)
-- game.settings.muteAudio respected + settings change listener
-- Best score via data module with localStorage fallback
-- No external requests, all assets procedural, bundle ~100 KB
-- Touch + mouse + keyboard-free; portrait-friendly, works on low-end devices
+## Controls
 
-## Files to upload
-- Build zip: astro-merge.zip (repo root po `npm run build` + `cd dist && zip -r ../astro-merge.zip .`)
-- Cover 16:9 (1920x1080): marketing/cover-16x9.png
-- Cover 1:1 (1080x1080): marketing/cover-1x1.png
-- Screenshots: marketing/screenshot-menu.png, marketing/screenshot-gameplay.png
+- Desktop: move the mouse or use Left/Right arrows to aim; click, Space, Enter
+  or Down Arrow to drop.
+- Mobile: drag to aim and tap to drop. In-game touch controls are at least
+  44 CSS pixels tall when present.
 
-## Age rating / audience
-All ages; designed for 10–16. No violence, no blood, no text chat, no user content.
+## CrazyGames SDK, data and ads
 
-## Full Launch update (v1.1) — new features
-- **Stardust meta-currency**: earned every merge (bonus for big planets), new-best bonus, persists via CrazyGames data module + localStorage.
-- **Shop & unlocks**: UNDO DROP (1/run), FAR SIGHT (see 2 next planets), NOVA BOMB (clear 3 smallest, 1/run), NEON + NOVA planet skins.
-- **14 goals/missions** (create Saturn/Jupiter/Sun, combo x4/x8, score & merge milestones) with stardust rewards + toast notifications.
-- **Planet Dex**: collection screen tracking every planet tier created.
-- **Daily bonus streak** (+10/day stardust, up to +50).
-- **Dynamic difficulty**: easier planet distribution for first 2 minutes of each run.
-- **Keyboard controls** on desktop (arrows + space).
-- **Rewarded ad: DOUBLE stardust** after each run, in addition to Second Chance.
+- SDK v3 initializes with a timeout; loading start/stop wrap boot.
+- Gameplay start/stop are deduplicated at active boundaries. Visibility, blur
+  and ad lifecycle pause simulation, input and WebAudio, then resume once.
+- CrazyGames mute setting and later settings changes control WebAudio.
+- Progress uses CrazyGames data when available with localStorage fallback.
+- Rewarded Second Chance and Double Stardust are optional natural-break offers.
+  Retry itself restarts locally without waiting for an ad.
+- Happytime is throttled; local development remains functional without SDK
+  access. No custom fullscreen and no cross-promotion are used.
 
-## Desktop presentation update (v1.2)
-- Full-viewport responsive Canvas 2D scene with DPR-aware rendering; no portrait letterboxing on landscape browsers.
-- Portrait merge chamber is integrated into a space-station frame, with mission/stardust/dex telemetry on the left and upcoming planets, combo state and one-click access on the right.
-- First-action cue guarantees a quick first merge without a text-heavy tutorial. Portrait controls retain 44px-or-larger touch targets.
-- Refreshed 16:9 screenshots and `marketing/video-landscape.mp4` show the native desktop composition.
+## Rating, URL and resubmission note
+
+- PEGI 12 compatible: no gore, gambling, chat, user-generated content or
+  external links.
+- Live URL: not yet published; this is the quality-resubmission build.
+- Resubmission note: fixed-step physics, lifecycle safety, full viewport proof,
+  persistence validation, pressure/merge readability and refreshed media were
+  added for this quality pass.
+
+## Submission assets
+
+- Distributable: `astro-merge.zip` (generated by `npm run build`)
+- Covers: `marketing/cover-16x9.png`, `marketing/cover-1x1.png`,
+  `marketing/cover-2x3.png`
+- Screenshots: `marketing/screenshot-menu.png`,
+  `marketing/screenshot-gameplay.png`, `marketing/screenshot-action.png`
+- Videos: `marketing/video-landscape.mp4`, `marketing/video-portrait.mp4`
+
