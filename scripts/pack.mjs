@@ -1,5 +1,9 @@
-// Copies index.html into dist/ so dist is a self-contained CrazyGames bundle
+// Keep both the local dist preview and the checked-in CrazyGames submission
+// bundle in sync. The latter is what the desktop QA server serves.
 import { copyFileSync, mkdirSync } from 'node:fs';
 mkdirSync('dist', { recursive: true });
 copyFileSync('index.html', 'dist/index.html');
-console.log('dist/ ready');
+mkdirSync('astro-merge', { recursive: true });
+copyFileSync('index.html', 'astro-merge/index.html');
+copyFileSync('dist/bundle.js', 'astro-merge/bundle.js');
+console.log('dist/ and astro-merge/ ready');

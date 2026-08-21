@@ -449,6 +449,71 @@ export function drawBackground(g, now) {
 }
 
 // ============================================================
+// DESKTOP STATION SCENE — full-bleed viewport behind the chamber
+// ============================================================
+export function drawDesktopScene(g, w, h, now, isDesktop) {
+  const bg = g.createLinearGradient(0, 0, w, h);
+  bg.addColorStop(0, '#050817');
+  bg.addColorStop(0.48, '#101a3c');
+  bg.addColorStop(1, '#071225');
+  g.fillStyle = bg;
+  g.fillRect(0, 0, w, h);
+
+  // Reuse the painted nebula as a full-bleed texture, then layer live stars
+  // across it so no edge can ever read as an unused black bar.
+  if (nebulaCanvas) {
+    const cover = Math.max(w / GAME_W, h / GAME_H);
+    const nw = GAME_W * cover, nh = GAME_H * cover;
+    g.globalAlpha = isDesktop ? 0.86 : 1;
+    g.drawImage(nebulaCanvas, (w - nw) / 2, (h - nh) / 2, nw, nh);
+    g.globalAlpha = 1;
+  }
+  const seedStars = 84;
+  for (let i = 0; i < seedStars; i++) {
+    const x = ((i * 137.51) % w + w) % w;
+    const y = ((i * 71.17 + now * (0.004 + (i % 4) * 0.001)) % h + h) % h;
+    const a = 0.22 + 0.42 * Math.abs(Math.sin(now / 900 + i));
+    g.fillStyle = `rgba(${i % 9 === 0 ? '160,215,255' : '255,255,255'},${a.toFixed(2)})`;
+    g.beginPath(); g.arc(x, y, i % 7 === 0 ? 1.6 : 0.8, 0, Math.PI * 2); g.fill();
+  }
+  // A thin illuminated hull seam keeps even portrait safe-area edges visibly
+  // intentional on OLED-black browser chrome.
+  g.fillStyle = '#1d3478';
+  g.fillRect(0, 0, w, 3);
+  g.fillRect(0, h - 3, w, 3);
+  if (!isDesktop) return;
+
+  // Slow parallax planets give the side presentation depth without competing
+  // with the active merge chamber.
+  const orb = (x, y, r, c1, c2, phase) => {
+    const dx = Math.sin(now / 12000 + phase) * 15;
+    const dy = Math.cos(now / 14500 + phase) * 10;
+    const p = g.createRadialGradient(x + dx - r * 0.28, y + dy - r * 0.28, r * 0.05, x + dx, y + dy, r);
+    p.addColorStop(0, c1); p.addColorStop(0.55, c2); p.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = p; g.beginPath(); g.arc(x + dx, y + dy, r, 0, Math.PI * 2); g.fill();
+  };
+  orb(w * 0.08, h * 0.78, Math.min(w, h) * 0.20, 'rgba(116,92,255,0.42)', 'rgba(47,24,123,0.10)', 0);
+  orb(w * 0.91, h * 0.18, Math.min(w, h) * 0.15, 'rgba(44,208,194,0.34)', 'rgba(12,74,108,0.06)', 2.3);
+
+  // Station trusses frame (rather than mask) the wide scene.
+  g.save();
+  const rail = g.createLinearGradient(0, 0, 0, 32);
+  rail.addColorStop(0, 'rgba(192,226,255,0.34)');
+  rail.addColorStop(0.45, 'rgba(48,79,124,0.62)');
+  rail.addColorStop(1, 'rgba(6,11,30,0.1)');
+  g.fillStyle = rail; g.fillRect(0, 0, w, 32); g.fillRect(0, h - 32, w, 32);
+  g.strokeStyle = 'rgba(142,199,255,0.24)'; g.lineWidth = 1;
+  for (let x = -40; x < w + 50; x += 56) {
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x + 36, 32); g.lineTo(x + 74, 0); g.stroke();
+    g.beginPath(); g.moveTo(x, h); g.lineTo(x + 36, h - 32); g.lineTo(x + 74, h); g.stroke();
+  }
+  g.strokeStyle = 'rgba(132,202,255,0.20)';
+  g.setLineDash([4, 10]);
+  g.beginPath(); g.moveTo(w * 0.04, h * 0.18); g.lineTo(w * 0.27, h * 0.45); g.moveTo(w * 0.96, h * 0.83); g.lineTo(w * 0.73, h * 0.55); g.stroke();
+  g.setLineDash([]); g.restore();
+}
+
+// ============================================================
 // GLASS CONTAINER — space-station dome walls + laser danger line
 // ============================================================
 export function drawContainer(g, now) {

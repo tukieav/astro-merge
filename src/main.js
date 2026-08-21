@@ -39,12 +39,33 @@ art.initArt(TIERS, GAME_W, GAME_H);
 const canvas = document.getElementById('game');
 const g = canvas.getContext('2d');
 let scale = 1;
+let dpr = 1;
+let viewW = 0;
+let viewH = 0;
+let desktop = false;
+let chamber = { x: 0, y: 0, w: GAME_W, h: GAME_H, scale: 1 };
 
 function resize() {
-  const vw = window.innerWidth, vh = window.innerHeight;
-  scale = Math.min(vw / GAME_W, vh / GAME_H);
-  canvas.width = Math.floor(GAME_W * scale);
-  canvas.height = Math.floor(GAME_H * scale);
+  viewW = window.innerWidth;
+  viewH = window.innerHeight;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  desktop = viewW > 600 && viewW / viewH > 1.05;
+  // The simulation remains a deliberate portrait chamber. On desktop it is
+  // mounted into a station scene rather than letterboxed as a mobile canvas.
+  scale = desktop
+    ? Math.min((viewH - 28) / GAME_H, (viewW * 0.44) / GAME_W, 1.42)
+    : Math.min(viewW / GAME_W, viewH / GAME_H);
+  chamber = {
+    x: (viewW - GAME_W * scale) / 2,
+    y: desktop ? (viewH - GAME_H * scale) / 2 : 0,
+    w: GAME_W * scale,
+    h: GAME_H * scale,
+    scale,
+  };
+  canvas.width = Math.round(viewW * dpr);
+  canvas.height = Math.round(viewH * dpr);
+  canvas.style.width = `${viewW}px`;
+  canvas.style.height = `${viewH}px`;
 }
 window.addEventListener('resize', resize);
 resize();
@@ -94,6 +115,8 @@ let bombLeft = 0;
 let nextTier2 = 0;
 let toasts = [];             // { text, life } top notifications (missions, daily bonus)
 let dailyMsg = null;
+let tutorialUntil = 0;
+let tutorialMerged = false;
 
 // skin palettes: id -> tier color overrides
 const SKINS = {
@@ -201,6 +224,7 @@ function processMerges() {
     const gained = TIERS[nt].score * combo;
     score += gained;
     mergesThisRun++;
+    if (performance.now() < tutorialUntil) tutorialMerged = true;
     meta.recordMerge(nt);
     meta.recordCombo(combo);
     // stardust: 1 per merge + tier bonus for big planets
@@ -268,7 +292,7 @@ function mergeFX(x, y, tier, comboN) {
 // ---------- Input ----------
 function toGameX(clientX) {
   const rect = canvas.getBoundingClientRect();
-  return (clientX - rect.left) / scale;
+  return (clientX - rect.left - chamber.x) / chamber.scale;
 }
 
 function clampDropX(x, tier) {
@@ -280,11 +304,16 @@ function pointerMove(clientX) {
   dropX = clampDropX(toGameX(clientX), currentTier);
 }
 
-function pointerUp() {
+function pointerUp(clientX = null, clientY = null) {
   if (overlay) return; // overlay buttons handled in handleClick
   if (state === 'menu') { startGame(); return; }
   if (state === 'gameover') return; // buttons handled separately
   if (state !== 'playing' || !canDrop || overlay) return;
+  if (desktop && clientX !== null) {
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left, y = clientY - rect.top;
+    if (x < chamber.x || x > chamber.x + chamber.w || y < chamber.y || y > chamber.y + chamber.h) return;
+  }
   audio.unlockAudio();
   canDrop = false;
   const dropped = spawnPlanet(currentTier, dropX, DROP_Y);
@@ -362,17 +391,25 @@ function keyboardMove(dt) {
 let buttons = [];
 function handleClick(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
-  const x = (clientX - rect.left) / scale;
-  const y = (clientY - rect.top) / scale;
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
   for (const b of buttons) {
     if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.fn(); return; }
   }
-  pointerUp();
+  pointerUp(clientX, clientY);
 }
 
 // ---------- Game flow ----------
 function startGame() {
   reset();
+  // The opening is intentionally authored: a waiting Pluto plus the same
+  // first drop guarantees a satisfying merge in the first interaction.
+  currentTier = 0;
+  nextTier = 0;
+  nextTier2 = randTier();
+  spawnPlanet(0, GAME_W / 2, GAME_H - TIERS[0].r - 12);
+  tutorialUntil = performance.now() + 30000;
+  tutorialMerged = false;
   state = 'playing';
   cg.gameplayStart();
 }
@@ -497,7 +534,89 @@ function roundRect(x, y, w, h, r) {
 
 function drawButton(x, y, w, h, text, fn, color = '#4a6cf0') {
   art.neonButton(g, x, y, w, h, text, color);
-  buttons.push({ x, y, w, h, fn, label: text });
+  // Buttons may live in the scaled chamber or in desktop-side UI. Store their
+  // actual CSS-pixel rectangles so hit testing remains exact at every DPR.
+  const m = g.getTransform();
+  buttons.push({
+    x: (m.a * x + m.c * y + m.e) / dpr,
+    y: (m.b * x + m.d * y + m.f) / dpr,
+    w: Math.abs(m.a * w) / dpr,
+    h: Math.abs(m.d * h) / dpr,
+    fn, label: text,
+  });
+}
+
+function drawLabel(text, x, y, size = 13, color = 'rgba(205,225,255,0.68)', align = 'left') {
+  g.fillStyle = color;
+  g.font = `700 ${size}px 'Segoe UI', sans-serif`;
+  g.textAlign = align;
+  g.textBaseline = 'top';
+  g.fillText(text, x, y);
+}
+
+function drawSideCard(x, y, w, h, title, accent = '#6fa8ff') {
+  art.glassPanel(g, x, y, w, h, 18);
+  g.fillStyle = accent;
+  g.fillRect(x + 16, y + 15, 30, 3);
+  drawLabel(title, x + 16, y + 25, 12);
+}
+
+function drawDesktopUI(now) {
+  if (!desktop) return;
+  const pad = Math.max(20, Math.min(42, viewW * 0.026));
+  const gap = 22;
+  const leftW = Math.max(210, chamber.x - pad - gap);
+  const rightX = chamber.x + chamber.w + gap;
+  const rightW = Math.max(210, viewW - rightX - pad);
+  const panelW = Math.min(390, leftW);
+  const lx = pad + Math.max(0, (leftW - panelW) * 0.5);
+  const rpW = Math.min(390, rightW);
+  const rx = rightX + Math.max(0, (rightW - rpW) * 0.5);
+  const titleY = Math.max(18, chamber.y + 4);
+
+  drawSideCard(lx, titleY, panelW, 158, 'MISSION CONTROL', '#82cfff');
+  g.fillStyle = '#fff'; g.font = "800 19px 'Segoe UI', sans-serif";
+  g.textAlign = 'left'; g.textBaseline = 'top';
+  const goal = tutorialMerged ? 'FIRST MERGE COMPLETE' : 'MAKE A MOON';
+  g.fillText(goal, lx + 16, titleY + 51);
+  drawLabel(tutorialMerged ? 'Next: build a three-merge combo.' : 'Drop the glowing Pluto onto its twin.', lx + 16, titleY + 78, 13, 'rgba(255,255,255,0.72)');
+  const progress = tutorialMerged ? 1 : Math.min(0.82, Math.max(0.18, (now % 3000) / 3000));
+  g.fillStyle = 'rgba(255,255,255,0.12)'; roundRect(lx + 16, titleY + 112, panelW - 32, 9, 5); g.fill();
+  g.fillStyle = tutorialMerged ? '#56e39f' : '#ffd84a'; roundRect(lx + 16, titleY + 112, (panelW - 32) * progress, 9, 5); g.fill();
+  drawLabel(tutorialMerged ? '1 / 1 ORBIT GOAL' : 'QUICK START', lx + 16, titleY + 130, 11, tutorialMerged ? '#78edb0' : '#ffd84a');
+
+  drawSideCard(lx, titleY + 178, panelW, 142, 'STAR CHART', '#b798ff');
+  const known = TIERS.filter((_, i) => (meta.state.dex[i] || 0) > 0 || i <= MAX_DROP_TIER).length;
+  g.fillStyle = '#ffd84a'; g.font = "800 30px 'Segoe UI', sans-serif"; g.textAlign = 'left'; g.textBaseline = 'top';
+  g.fillText(`✦ ${meta.state.stardust}`, lx + 16, titleY + 212);
+  drawLabel('STARDUST IN RESERVE', lx + 18, titleY + 250, 11);
+  g.fillStyle = '#fff'; g.font = "800 20px 'Segoe UI', sans-serif"; g.fillText(`${known} / ${TIERS.length}`, lx + 16, titleY + 276);
+  drawLabel('PLANETS DISCOVERED', lx + 82, titleY + 280, 11);
+
+  drawSideCard(rx, titleY, rpW, 188, 'ORBITAL SCANNER', '#ffca70');
+  drawLabel('NEXT DROP', rx + 16, titleY + 52, 11);
+  const drawScannerPlanet = (tier, px, py, max, alpha = 1) => {
+    const s = Math.min(1, max / TIERS[tier].r);
+    g.save(); g.translate(px, py); g.scale(s, s); drawPlanet(0, 0, 0, tier, alpha, 1, 1, now); g.restore();
+  };
+  drawScannerPlanet(nextTier, rx + 54, titleY + 101, 30);
+  g.fillStyle = '#fff'; g.font = "800 17px 'Segoe UI', sans-serif"; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillText(TIERS[nextTier].name, rx + 98, titleY + 80);
+  drawLabel('AFTER THAT', rx + 98, titleY + 106, 11);
+  drawScannerPlanet(nextTier2, rx + 54, titleY + 148, 19, 0.72);
+  g.fillStyle = 'rgba(255,255,255,0.76)'; g.font = "700 14px 'Segoe UI', sans-serif"; g.fillText(TIERS[nextTier2].name, rx + 98, titleY + 137);
+
+  drawSideCard(rx, titleY + 208, rpW, 112, 'RUN TELEMETRY', '#67e8d8');
+  g.fillStyle = '#fff'; g.font = "800 29px 'Segoe UI', sans-serif"; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillText(String(score), rx + 16, titleY + 242);
+  drawLabel('SCORE', rx + 18, titleY + 278, 11);
+  g.fillStyle = combo > 1 ? '#ffd84a' : 'rgba(255,255,255,0.84)'; g.font = "800 22px 'Segoe UI', sans-serif"; g.fillText(combo > 1 ? `x${combo}` : 'READY', rx + rpW * 0.58, titleY + 247);
+  drawLabel('COMBO', rx + rpW * 0.58, titleY + 278, 11);
+
+  const controlsY = Math.min(viewH - 146, titleY + 340);
+  drawSideCard(rx, controlsY, rpW, 126, 'STATION ACCESS', '#78a8ff');
+  const bw = Math.floor((rpW - 48) / 3);
+  drawButton(rx + 16, controlsY + 53, bw, 52, 'SHOP', () => { overlay = 'shop'; }, '#8f6dff');
+  drawButton(rx + 24 + bw, controlsY + 53, bw, 52, 'GOALS', () => { overlay = 'missions'; }, '#4da8ff');
+  drawButton(rx + 32 + bw * 2, controlsY + 53, bw, 52, 'DEX', () => { overlay = 'dex'; }, '#ff9f43');
 }
 
 let lastTime = performance.now();
@@ -551,7 +670,13 @@ function frame(now) {
 
 function render(now) {
   buttons = [];
-  g.setTransform(scale, 0, 0, scale, 0, 0);
+  // First paint the complete browser viewport in CSS pixels. The chamber is a
+  // second, local coordinate system so Matter physics stays untouched.
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  art.drawDesktopScene(g, viewW, viewH, now, desktop);
+  g.save();
+  g.translate(chamber.x, chamber.y);
+  g.scale(chamber.scale, chamber.scale);
   if (shake > 0) g.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
 
   // background
@@ -661,6 +786,24 @@ function render(now) {
       // gentle bob while aiming
       const bob = Math.sin(now / 300) * 2;
       drawPlanet(dropX, DROP_Y + bob, 0, currentTier, 0.95, 1, 1, now);
+    }
+    // A compact, animated first-action cue replaces a text tutorial. It fades
+    // after the first merge or 30 seconds, whichever comes first.
+    if (!tutorialMerged && now < tutorialUntil) {
+      const pulse = 0.5 + 0.5 * Math.sin(now / 260);
+      const targetY = GAME_H - TIERS[0].r - 42;
+      g.save();
+      g.globalAlpha = 0.78 + pulse * 0.2;
+      g.strokeStyle = '#ffd84a'; g.lineWidth = 3;
+      g.setLineDash([7, 8]);
+      g.beginPath(); g.moveTo(GAME_W / 2, DROP_Y + 44); g.lineTo(GAME_W / 2, targetY - 16); g.stroke();
+      g.setLineDash([]);
+      g.fillStyle = '#ffd84a';
+      g.beginPath(); g.moveTo(GAME_W / 2 - 8, targetY - 21); g.lineTo(GAME_W / 2 + 8, targetY - 21); g.lineTo(GAME_W / 2, targetY - 8); g.closePath(); g.fill();
+      art.glassPanel(g, GAME_W / 2 - 142, 150, 284, 48, 14);
+      g.fillStyle = '#fff'; g.font = "bold 16px 'Segoe UI', sans-serif"; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('DROP ON THE GLOWING PLANET', GAME_W / 2, 174);
+      g.restore();
     }
     // HUD
     art.glassPanel(g, 10, 8, 150, 84, 12);
@@ -847,6 +990,13 @@ function render(now) {
     g.font = "22px 'Segoe UI', sans-serif";
     g.fillText('Loading...', GAME_W / 2, GAME_H / 2);
   }
+  g.restore();
+  // Chamber paint may cover the scene seam; redraw it in viewport space so
+  // every browser edge remains an intentional part of the station frame.
+  g.fillStyle = '#1d3478';
+  g.fillRect(0, 0, viewW, 3);
+  g.fillRect(0, viewH - 3, viewW, 3);
+  drawDesktopUI(now);
 }
 
 // ---------- Overlays: shop / missions / dex ----------
