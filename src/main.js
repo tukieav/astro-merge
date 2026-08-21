@@ -16,6 +16,8 @@ const WALL_T = 60;
 const DANGER_Y = 130;           // game over line
 const DROP_Y = 90;
 const GRACE_MS = 2500;          // time a planet may sit above line before game over
+const FIXED_STEP_MS = 1000 / 60;
+const MAX_CATCHUP_MS = 250;
 
 // 11 planet tiers: name, radius, color pair, score
 const TIERS = [
@@ -117,6 +119,15 @@ let toasts = [];             // { text, life } top notifications (missions, dail
 let dailyMsg = null;
 let tutorialUntil = 0;
 let tutorialMerged = false;
+let simTime = 0;
+let physicsAccumulator = 0;
+let paused = false;
+let pauseReasons = new Set();
+let dropReadyAt = 0;
+let lossReason = '';
+let reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false;
+let mergeTelegraphs = [];
+let chainPaths = [];
 
 // skin palettes: id -> tier color overrides
 const SKINS = {
@@ -145,7 +156,7 @@ for (let i = 0; i < 90; i++) {
 function randTier() {
   // weighted: small planets more common; first 2 minutes of a run are easier
   // (dynamic difficulty: bias toward smaller planets early)
-  const elapsed = runStart ? (performance.now() - runStart) / 1000 : 999;
+  const elapsed = runStart ? (simTime - runStart) / 1000 : 999;
   const ease = Math.max(0, 1 - elapsed / 120); // 1 -> 0 over first 2 min
   const w = [30 + 14 * ease, 26 + 6 * ease, 20, 14 - 8 * ease, 10 - 6 * ease];
   const total = w.reduce((a, b) => a + b, 0);
@@ -164,7 +175,7 @@ function spawnPlanet(tier, x, y, vx = 0, vy = 0) {
   Body.setVelocity(body, { x: vx, y: vy });
   Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.05);
   World.add(engine.world, body);
-  const p = { body, tier, born: performance.now(), aboveSince: 0, pop: 0, sq: 0, sqT: 0, landed: false };
+  const p = { body, tier, born: simTime, aboveSince: 0, pop: 0, sq: 0, sqT: 0, landed: false };
   planets.push(p);
   return p;
 }
@@ -174,18 +185,21 @@ function reset() {
   planets = [];
   particles = [];
   rings = []; flashes = []; sparkles = [];
+  mergeTelegraphs = []; chainPaths = [];
   floatTexts = [];
   score = 0; combo = 0; comboTimer = 0; mergesThisRun = 0;
   usedSecondChance = false;
   stardustEarned = 0;
   lastDrop = null;
-  runStart = performance.now();
+  runStart = simTime;
   undoLeft = meta.state.unlocks.undo ? 1 : 0;
   bombLeft = meta.state.unlocks.bomb ? 1 : 0;
   currentTier = randTier();
   nextTier = randTier();
   nextTier2 = randTier();
   canDrop = true;
+  dropReadyAt = simTime;
+  lossReason = '';
 }
 
 // ---------- Merging ----------
@@ -203,16 +217,25 @@ Events.on(engine, 'collisionStart', (ev) => {
 });
 
 const mergeQueue = [];
-function queueMerge(a, b) { mergeQueue.push([a, b]); }
+function queueMerge(a, b) {
+  const mx = (a.body.position.x + b.body.position.x) / 2;
+  const my = (a.body.position.y + b.body.position.y) / 2;
+  // A short, deterministic anticipation window makes an impending merge
+  // readable without changing the fixed-step simulation result.
+  mergeQueue.push({ a, b, at: simTime + 145, mx, my });
+  mergeTelegraphs.push({ a, b, until: simTime + 145, color: TIERS[a.tier + 1].c1 });
+  const pull = 0.018;
+  Body.applyForce(a.body, a.body.position, { x: (mx - a.body.position.x) * pull, y: (my - a.body.position.y) * pull });
+  Body.applyForce(b.body, b.body.position, { x: (mx - b.body.position.x) * pull, y: (my - b.body.position.y) * pull });
+}
 
 function processMerges() {
   while (mergeQueue.length) {
-    const [a, b] = mergeQueue.shift();
+    if (mergeQueue[0].at > simTime) break;
+    const { a, b, mx, my } = mergeQueue.shift();
     toMerge.delete(a); toMerge.delete(b);
     if (!planets.includes(a) || !planets.includes(b)) continue;
     const nt = a.tier + 1;
-    const mx = (a.body.position.x + b.body.position.x) / 2;
-    const my = (a.body.position.y + b.body.position.y) / 2;
     World.remove(engine.world, a.body);
     World.remove(engine.world, b.body);
     planets = planets.filter(p => p !== a && p !== b);
@@ -224,7 +247,7 @@ function processMerges() {
     const gained = TIERS[nt].score * combo;
     score += gained;
     mergesThisRun++;
-    if (performance.now() < tutorialUntil) tutorialMerged = true;
+    if (simTime < tutorialUntil) tutorialMerged = true;
     meta.recordMerge(nt);
     meta.recordCombo(combo);
     // stardust: 1 per merge + tier bonus for big planets
@@ -240,7 +263,9 @@ function processMerges() {
     }
     // fx
     mergeFX(mx, my, nt, combo);
-    floatTexts.push({ x: mx, y: my - TIERS[nt].r, text: `+${gained}${combo > 1 ? '  x' + combo : ''}`, life: 1.2, big: combo > 2 });
+    const lane = (floatTexts.length % 3) - 1;
+    floatTexts.push({ x: mx + lane * 38, y: my - TIERS[nt].r - (lane === 0 ? 0 : 18), text: `+${gained}${combo > 1 ? '  x' + combo : ''}`, life: 1.2, big: combo > 2 });
+    chainPaths.push({ x0: a.body.position.x, y0: a.body.position.y, x1: b.body.position.x, y1: b.body.position.y, life: 0.8, color: TIERS[nt].c1 });
     shake = Math.min(16, 2 + nt * 0.8 + (combo >= 5 ? 6 + combo : 0));
     if (nt >= 8) { audio.bigMergeSound(); cg.happytime(); }
     else audio.popSound(nt, combo);
@@ -263,11 +288,12 @@ function burstParticles(x, y, color, radius) {
 // full merge juice: flash + expanding ring + colored particles + stardust sparkles
 function mergeFX(x, y, tier, comboN) {
   const t = TIERS[tier];
+  const motionScale = reducedMotion ? 0.42 : 1;
   const boost = 1 + Math.min(1.6, (comboN - 1) * 0.22);
-  flashes.push({ x, y, r: t.r * 1.5 * boost, life: 1 });
+  flashes.push({ x, y, r: t.r * 1.5 * boost, life: reducedMotion ? 0.45 : 1 });
   rings.push({ x, y, r: t.r * 0.5, r1: t.r * (2.1 + 0.4 * boost), life: 1, color: t.c1, lw: 3 + tier * 0.4 });
   if (comboN >= 3) rings.push({ x, y, r: t.r * 0.3, r1: t.r * (3 + boost), life: 1, color: '#ffd84a', lw: 2 });
-  const n = Math.min(40, Math.floor((12 + t.r / 6) * boost));
+  const n = Math.min(40, Math.floor((12 + t.r / 6) * boost * motionScale));
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2;
     const sp = (2 + Math.random() * 5.5) * boost;
@@ -277,7 +303,7 @@ function mergeFX(x, y, tier, comboN) {
       life: 0.6 + Math.random() * 0.6,
     });
   }
-  const ns = Math.min(14, 4 + tier + comboN);
+  const ns = Math.min(14, Math.floor((4 + tier + comboN) * motionScale));
   for (let i = 0; i < ns; i++) {
     const a = Math.random() * Math.PI * 2;
     const sp = 1.5 + Math.random() * 3.5;
@@ -305,6 +331,7 @@ function pointerMove(clientX) {
 }
 
 function pointerUp(clientX = null, clientY = null) {
+  if (paused) return;
   if (overlay) return; // overlay buttons handled in handleClick
   if (state === 'menu') { startGame(); return; }
   if (state === 'gameover') return; // buttons handled separately
@@ -323,7 +350,7 @@ function pointerUp(clientX = null, clientY = null) {
   nextTier = nextTier2;
   nextTier2 = randTier();
   dropX = clampDropX(dropX, currentTier);
-  setTimeout(() => { canDrop = true; }, 450);
+  dropReadyAt = simTime + 450;
 }
 
 // UNDO power-up: revoke the last drop (only before it merges)
@@ -372,6 +399,7 @@ canvas.addEventListener('touchend', e => {
 // keyboard controls (desktop): arrows move, space/enter drops
 const keysHeld = {};
 window.addEventListener('keydown', (e) => {
+  if (paused) return;
   if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') { keysHeld[e.code] = true; e.preventDefault(); }
   if (e.code === 'Space' || e.code === 'Enter' || e.code === 'ArrowDown') {
     e.preventDefault();
@@ -408,15 +436,16 @@ function startGame() {
   nextTier = 0;
   nextTier2 = randTier();
   spawnPlanet(0, GAME_W / 2, GAME_H - TIERS[0].r - 12);
-  tutorialUntil = performance.now() + 30000;
+  tutorialUntil = simTime + 30000;
   tutorialMerged = false;
   state = 'playing';
   cg.gameplayStart();
 }
 
 async function gameOver() {
+  if (state !== 'playing') return;
   state = 'gameover';
-  gameOverAt = performance.now();
+  gameOverAt = simTime;
   overlay = null;
   audio.gameOverSound();
   cg.gameplayStop();
@@ -437,8 +466,8 @@ async function doubleStardust() {
   if (doubledStardust || stardustEarned <= 0) return;
   state = 'adplaying';
   const ok = await cg.requestAd('rewarded', {
-    onStart: () => audio.setMuted(true),
-    onFinish: () => audio.setMuted(cg.getMuteSetting()),
+    onStart: () => { setPaused('ad', true); audio.setMuted(true); },
+    onFinish: () => { audio.setMuted(cg.getMuteSetting()); setPaused('ad', false); },
   });
   if (ok) {
     meta.addStardust(stardustEarned);
@@ -451,19 +480,16 @@ async function doubleStardust() {
 }
 
 async function restartWithAd() {
-  state = 'adplaying';
-  await cg.requestAd('midgame', {
-    onStart: () => audio.setMuted(true),
-    onFinish: () => audio.setMuted(cg.getMuteSetting()),
-  });
+  // Retry is always immediate. A midgame ad can be requested only at a later
+  // natural break, never as a gate in front of a player's restart.
   startGame();
 }
 
 async function secondChance() {
   state = 'adplaying';
   const ok = await cg.requestAd('rewarded', {
-    onStart: () => audio.setMuted(true),
-    onFinish: () => audio.setMuted(cg.getMuteSetting()),
+    onStart: () => { setPaused('ad', true); audio.setMuted(true); },
+    onFinish: () => { audio.setMuted(cg.getMuteSetting()); setPaused('ad', false); },
   });
   if (ok) {
     usedSecondChance = true;
@@ -493,14 +519,37 @@ function checkDanger(now) {
     if (settled && above) {
       anyAbove = true;
       if (!p.aboveSince) p.aboveSince = now;
-      else if (now - p.aboveSince > GRACE_MS) { gameOver(); return; }
+      else if (now - p.aboveSince > GRACE_MS) { lossReason = 'A planet stayed above the pressure line.'; gameOver(); return; }
     } else {
       p.aboveSince = 0;
     }
   }
   dangerPulse = anyAbove ? Math.min(1, dangerPulse + 0.04) : Math.max(0, dangerPulse - 0.04);
-  if (anyAbove && Math.random() < 0.02) audio.warnSound();
+  if (anyAbove && Math.floor(now / 500) !== Math.floor((now - FIXED_STEP_MS) / 500)) audio.warnSound();
 }
+
+function setPaused(reason, shouldPause) {
+  if (shouldPause) pauseReasons.add(reason); else pauseReasons.delete(reason);
+  const next = pauseReasons.size > 0;
+  if (next === paused) return;
+  paused = next;
+  for (const key of Object.keys(keysHeld)) delete keysHeld[key];
+  if (paused) {
+    audio.suspend();
+    if (state === 'playing') cg.gameplayStop();
+  } else {
+    lastTime = performance.now();
+    audio.resume();
+    if (state === 'playing') cg.gameplayStart();
+  }
+}
+
+window.addEventListener('blur', () => setPaused('blur', true));
+window.addEventListener('focus', () => setPaused('blur', false));
+document.addEventListener('visibilitychange', () => {
+  setPaused('hidden', document.hidden);
+  if (document.hidden) meta.flushIfDirty();
+});
 
 // ---------- Drawing ----------
 function drawPlanet(x, y, angle, tier, alpha = 1, sx = 1, sy = 1, now = 0) {
@@ -620,50 +669,60 @@ function drawDesktopUI(now) {
 }
 
 let lastTime = performance.now();
-function frame(now) {
-  requestAnimationFrame(frame);
-  const dt = Math.min(0.05, (now - lastTime) / 1000);
-  lastTime = now;
-
+function advanceSimulation() {
+  simTime += FIXED_STEP_MS;
+  if (dropReadyAt && simTime >= dropReadyAt) canDrop = true;
   if (state === 'playing' && !overlay) {
-    keyboardMove(dt);
-    Engine.update(engine, 1000 / 60);
+    keyboardMove(FIXED_STEP_MS / 1000);
+    Engine.update(engine, FIXED_STEP_MS);
     processMerges();
-    checkDanger(now);
-    if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) combo = 0; }
-    // squash & stretch on landing: detect first solid contact
+    checkDanger(simTime);
+    if (comboTimer > 0) { comboTimer -= FIXED_STEP_MS / 1000; if (comboTimer <= 0) combo = 0; }
     for (const p of planets) {
-      if (!p.landed && now - p.born > 80) {
+      if (!p.landed && simTime - p.born > 80) {
         const vy = p.body.velocity.y;
         if (p.maxVy === undefined) p.maxVy = 0;
         p.maxVy = Math.max(p.maxVy, vy);
         if (p.maxVy > 4 && vy < 1.2) {
           p.landed = true;
           p.sq = Math.min(0.30, p.maxVy * 0.025);
-          p.sqT = now;
+          p.sqT = simTime;
         }
       }
     }
   }
-
-  // update particles / texts
-  for (const p of particles) {
-    p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= dt * 1.4;
-  }
-  particles = particles.filter(p => p.life > 0);
+  const dt = FIXED_STEP_MS / 1000;
+  const unit = dt * 60;
+  for (const p of planets) if (p.pop > 0) p.pop = Math.max(0, p.pop - dt * 5.4);
+  for (const p of particles) { p.x += p.vx * unit; p.y += p.vy * unit; p.vy += 0.15 * unit; p.life -= dt * 1.4; }
+  particles = particles.filter(p => p.life > 0).slice(-360);
   for (const r of rings) r.life -= dt * 2.2;
-  rings = rings.filter(r => r.life > 0);
+  rings = rings.filter(r => r.life > 0).slice(-24);
   for (const f of flashes) f.life -= dt * 4.5;
-  flashes = flashes.filter(f => f.life > 0);
-  for (const s of sparkles) {
-    s.x += s.vx; s.y += s.vy; s.vy += 0.08; s.life -= dt * 1.2; s.rot += dt * 4;
-  }
-  sparkles = sparkles.filter(s => s.life > 0);
+  flashes = flashes.filter(f => f.life > 0).slice(-24);
+  for (const s of sparkles) { s.x += s.vx * unit; s.y += s.vy * unit; s.vy += 0.08 * unit; s.life -= dt * 1.2; s.rot += dt * 4; }
+  sparkles = sparkles.filter(s => s.life > 0).slice(-160);
   for (const f of floatTexts) { f.y -= 40 * dt; f.life -= dt; }
-  floatTexts = floatTexts.filter(f => f.life > 0);
+  floatTexts = floatTexts.filter(f => f.life > 0).slice(-12);
   for (const t of toasts) t.life -= dt;
-  toasts = toasts.filter(t => t.life > 0);
-  if (shake > 0) shake = Math.max(0, shake - dt * 30);
+  toasts = toasts.filter(t => t.life > 0).slice(-5);
+  mergeTelegraphs = mergeTelegraphs.filter(m => m.until > simTime);
+  for (const path of chainPaths) path.life -= dt * 1.5;
+  chainPaths = chainPaths.filter(path => path.life > 0).slice(-12);
+  if (shake > 0) shake = Math.max(0, shake - dt * (reducedMotion ? 55 : 30));
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const elapsed = Math.min(MAX_CATCHUP_MS, Math.max(0, now - lastTime));
+  lastTime = now;
+  if (!paused) {
+    physicsAccumulator += elapsed;
+    while (physicsAccumulator + 1e-7 >= FIXED_STEP_MS) {
+      advanceSimulation();
+      physicsAccumulator -= FIXED_STEP_MS;
+    }
+  }
 
   render(now);
 }
@@ -677,7 +736,7 @@ function render(now) {
   g.save();
   g.translate(chamber.x, chamber.y);
   g.scale(chamber.scale, chamber.scale);
-  if (shake > 0) g.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  if (shake > 0 && !reducedMotion) g.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
 
   // background
   g.fillStyle = '#05070f';
@@ -694,15 +753,44 @@ function render(now) {
     art.drawLaserLine(g, DANGER_Y, now, dangerPulse);
   }
 
+  // Spatial pressure read: every settled body breaking the line gets a
+  // projected danger column and a visible grace countdown.
+  if (state === 'playing') {
+    for (const p of planets) {
+      if (!p.aboveSince) continue;
+      const remaining = Math.max(0, (GRACE_MS - (simTime - p.aboveSince)) / 1000);
+      g.save();
+      g.globalAlpha = 0.18 + dangerPulse * 0.35;
+      g.fillStyle = '#ff4d5d';
+      g.fillRect(p.body.position.x - TIERS[p.tier].r, 0, TIERS[p.tier].r * 2, DANGER_Y);
+      g.strokeStyle = '#ffe2e5'; g.lineWidth = 2;
+      g.beginPath(); g.arc(p.body.position.x, Math.max(20, p.body.position.y - TIERS[p.tier].r - 16), 11 + dangerPulse * 7, 0, Math.PI * 2); g.stroke();
+      g.globalAlpha = 1; g.fillStyle = '#fff1f1'; g.font = "bold 14px 'Segoe UI', sans-serif"; g.textAlign = 'center';
+      g.fillText(`${remaining.toFixed(1)}s`, p.body.position.x, Math.max(18, p.body.position.y - TIERS[p.tier].r - 11));
+      g.restore();
+    }
+  }
+
+  // Pair telegraphs make the pull and the resulting tier readable before the
+  // bodies are removed by the fixed-step merge.
+  for (const m of mergeTelegraphs) {
+    if (!planets.includes(m.a) || !planets.includes(m.b)) continue;
+    const life = Math.max(0, (m.until - simTime) / 145);
+    const ax = m.a.body.position.x, ay = m.a.body.position.y, bx = m.b.body.position.x, by = m.b.body.position.y;
+    g.save(); g.globalAlpha = 0.35 + (1 - life) * 0.55; g.strokeStyle = m.color; g.lineWidth = 2.5;
+    g.setLineDash([5, 5]); g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke(); g.setLineDash([]);
+    for (const [x, y] of [[ax, ay], [bx, by]]) { g.beginPath(); g.arc(x, y, TIERS[m.a.tier].r + 7 + (1 - life) * 8, 0, Math.PI * 2); g.stroke(); }
+    g.restore();
+  }
+
   // planets
   for (const p of planets) {
     // spawn pop: overshoot scale-in on merge result
-    if (p.pop > 0) p.pop = Math.max(0, p.pop - 0.09);
     const pop = p.pop > 0 ? 1 + Math.sin((1 - p.pop) * Math.PI) * 0.22 : 1;
     // squash & stretch after landing (decaying bounce)
     let sqx = 1, sqy = 1;
     if (p.sq > 0) {
-      const el = (now - p.sqT) / 260;
+      const el = (simTime - p.sqT) / 260;
       if (el < 1) {
         const k = p.sq * (1 - el) * Math.cos(el * Math.PI * 2);
         sqx = 1 + k; sqy = 1 - k;
@@ -750,6 +838,11 @@ function render(now) {
   g.globalAlpha = 1;
   g.restore();
 
+  for (const path of chainPaths) {
+    g.save(); g.globalAlpha = path.life; g.strokeStyle = path.color; g.lineWidth = 2;
+    g.setLineDash([3, 7]); g.beginPath(); g.moveTo(path.x0, path.y0); g.lineTo(path.x1, path.y1); g.stroke(); g.setLineDash([]); g.restore();
+  }
+
   // particles
   for (const p of particles) {
     g.globalAlpha = Math.max(0, p.life);
@@ -789,10 +882,13 @@ function render(now) {
     }
     // A compact, animated first-action cue replaces a text tutorial. It fades
     // after the first merge or 30 seconds, whichever comes first.
-    if (!tutorialMerged && now < tutorialUntil) {
+    if (!tutorialMerged && simTime < tutorialUntil) {
       const pulse = 0.5 + 0.5 * Math.sin(now / 260);
       const targetY = GAME_H - TIERS[0].r - 42;
       g.save();
+      g.globalAlpha = 0.2 + pulse * 0.22;
+      g.strokeStyle = '#ffd84a'; g.lineWidth = 4;
+      g.beginPath(); g.arc(GAME_W / 2, GAME_H - TIERS[0].r - 12, TIERS[0].r + 13 + pulse * 7, 0, Math.PI * 2); g.stroke();
       g.globalAlpha = 0.78 + pulse * 0.2;
       g.strokeStyle = '#ffd84a'; g.lineWidth = 3;
       g.setLineDash([7, 8]);
@@ -841,8 +937,8 @@ function render(now) {
       }
     }
     // power-up buttons (bottom corners)
-    if (undoLeft > 0) drawButton(10, GAME_H - 54, 96, 42, `\u21B6 UNDO`, useUndo, '#5f3dc4');
-    if (bombLeft > 0) drawButton(GAME_W - 106, GAME_H - 54, 96, 42, `\u2600 NOVA`, useBomb, '#e8590c');
+    if (meta.state.unlocks.undo) drawButton(10, GAME_H - 60, 118, 48, undoLeft > 0 ? `↶ UNDO ${undoLeft}/1` : 'UNDO USED', useUndo, undoLeft > 0 ? '#5f3dc4' : '#555b70');
+    if (meta.state.unlocks.bomb) drawButton(GAME_W - 128, GAME_H - 60, 118, 48, bombLeft > 0 ? `☀ NOVA ${bombLeft}/1` : 'NOVA USED', useBomb, bombLeft > 0 ? '#e8590c' : '#555b70');
     // combo
     if (combo > 1) {
       g.textAlign = 'center';
@@ -934,23 +1030,23 @@ function render(now) {
     g.shadowBlur = 18;
     g.fillStyle = '#ff6b6b';
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.font = "bold 44px 'Segoe UI', sans-serif";
-    g.fillText('GAME OVER', GAME_W / 2, 210);
+    g.font = "bold 30px 'Segoe UI', sans-serif";
+    g.fillText('CHAMBER OVERLOAD', GAME_W / 2, 210);
     g.restore();
     g.fillStyle = '#fff';
     g.font = "bold 34px 'Segoe UI', sans-serif";
     g.fillText(String(score), GAME_W / 2, 270);
     g.font = "16px 'Segoe UI', sans-serif";
     g.fillStyle = 'rgba(255,255,255,0.65)';
-    g.fillText(score >= best && score > 0 ? 'NEW BEST!' : `Best: ${best}`, GAME_W / 2, 310);
+    g.fillText(lossReason || (score >= best && score > 0 ? 'NEW BEST!' : `Best: ${best}`), GAME_W / 2, 310);
     g.fillStyle = '#ffd84a';
     g.fillText(`+${stardustEarned}\u2726 stardust earned`, GAME_W / 2, 340);
     let by = 385;
-    if (!usedSecondChance && planets.length > 4 && performance.now() - gameOverAt > 600) {
+    if (!usedSecondChance && planets.length > 4 && simTime - gameOverAt > 600) {
       drawButton(GAME_W / 2 - 150, by, 300, 56, '\u25B6 SECOND CHANCE (AD)', secondChance, '#f59f00');
       by += 70;
     }
-    if (performance.now() - gameOverAt > 600) {
+    if (simTime - gameOverAt > 600) {
       if (!doubledStardust && stardustEarned > 0) {
         drawButton(GAME_W / 2 - 150, by, 300, 56, `\u25B6 DOUBLE \u2726 (AD)`, doubleStardust, '#5f3dc4');
         by += 70;
@@ -1110,13 +1206,16 @@ function renderOverlay() {
 if (location.search.includes('debug=1')) {
   window.__astro = {
     forceGameOver: () => gameOver(),
+    restart: () => startGame(),
     getState: () => ({
       state, score, planets: planets.length, overlay,
       stardust: meta.state.stardust, unlocks: { ...meta.state.unlocks },
       skin: meta.state.skin, streak: meta.state.streak,
       missionsDone: Object.keys(meta.state.missionsDone).length,
       totalRuns: meta.state.totalRuns, totalMerges: meta.state.totalMerges,
-      undoLeft, bombLeft, stardustEarned,
+      undoLeft, bombLeft, stardustEarned, paused, simTime,
+      tiers: planets.reduce((all, p) => { all[p.tier] = (all[p.tier] || 0) + 1; return all; }, {}),
+      counts: { planets: planets.length, particles: particles.length, rings: rings.length, sparkles: sparkles.length, texts: floatTexts.length, telegraphs: mergeTelegraphs.length, queuedMerges: mergeQueue.length, listeners: 13, timers: 0 },
     }),
     addScore: (n) => { score += n; },
     addStardust: (n) => { meta.addStardust(n); meta.save(); },
@@ -1128,12 +1227,20 @@ if (location.search.includes('debug=1')) {
     spawn: (tier, x, y) => spawnPlanet(tier, x ?? GAME_W / 2, y ?? 200),
     useUndo,
     useBomb,
+    advance: (seconds) => {
+      const steps = Math.max(0, Math.floor(seconds * 60));
+      for (let i = 0; i < steps; i++) advanceSimulation();
+      return window.__astro.getState();
+    },
+    setPaused: (value) => setPaused('debug', value),
+    setReducedMotion: (value) => { reducedMotion = !!value; },
     pressButton: (substr) => {
       const b = buttons.find(b => b.label && b.label.includes(substr));
       if (b) { b.fn(); return true; }
       return false;
     },
     buttons: () => buttons.map(b => b.label),
+    buttonRects: () => buttons.map(({ x, y, w, h, label }) => ({ x, y, w, h, label })),
   };
 }
 
@@ -1148,7 +1255,8 @@ if (location.search.includes('debug=1')) {
   // flush pending meta saves periodically + on tab close (never lose progress)
   setInterval(() => meta.flushIfDirty(), 5000);
   window.addEventListener('beforeunload', () => meta.flushIfDirty());
-  document.addEventListener('visibilitychange', () => { if (document.hidden) meta.flushIfDirty(); });
+  const motionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+  motionQuery?.addEventListener?.('change', event => { reducedMotion = event.matches; });
   window.__astroReady = true;
   requestAnimationFrame(frame);
 })();

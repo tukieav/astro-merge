@@ -5,6 +5,7 @@ import * as cg from './sdk.js';
 const KEY = 'meta';
 
 export const state = {
+  version: 2,
   stardust: 0,
   totalRuns: 0,
   totalMerges: 0,
@@ -49,19 +50,38 @@ export const SHOP_ITEMS = [
 
 let dirty = false;
 
-export function load() {
-  const saved = cg.loadData(KEY);
-  if (saved && typeof saved === 'object') {
-    for (const k of Object.keys(state)) {
-      if (saved[k] !== undefined) {
-        if (typeof state[k] === 'object' && state[k] !== null && !Array.isArray(state[k])) {
-          Object.assign(state[k], saved[k]);
-        } else {
-          state[k] = saved[k];
-        }
-      }
-    }
+function number(value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) {
+  return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+}
+
+// Saves are player-controlled local data. Copy only known, correctly-shaped
+// fields so old/corrupt saves cannot turn an expected object into a primitive.
+function migrate(saved) {
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
+  const safe = {
+    version: 2,
+    stardust: number(saved.stardust, 0),
+    totalRuns: number(saved.totalRuns, 0),
+    totalMerges: number(saved.totalMerges, 0),
+    skin: typeof saved.skin === 'string' ? saved.skin : 'classic',
+    unlocks: {}, missionsDone: {}, dex: {},
+    streak: number(saved.streak, 0, 0, 3650),
+    lastDay: typeof saved.lastDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(saved.lastDay) ? saved.lastDay : '',
+    bestCombo: number(saved.bestCombo, 0, 0, 999),
+    music: typeof saved.music === 'boolean' ? saved.music : true,
+  };
+  for (const id of Object.keys(state.unlocks)) safe.unlocks[id] = !!saved.unlocks?.[id];
+  for (const [id, value] of Object.entries(saved.missionsDone || {})) if (typeof value === 'boolean') safe.missionsDone[id] = value;
+  for (const [tier, value] of Object.entries(saved.dex || {})) {
+    if (/^(?:[0-9]|10)$/.test(tier)) safe.dex[tier] = number(value, 0, 0, 1000000);
   }
+  if (safe.skin !== 'classic' && !safe.unlocks[safe.skin]) safe.skin = 'classic';
+  return safe;
+}
+
+export function load() {
+  const saved = migrate(cg.loadData(KEY));
+  if (saved) Object.assign(state, saved);
   return dailyBonus();
 }
 
