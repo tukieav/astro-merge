@@ -2,9 +2,11 @@
 // Run after `npm run build`: node tools/e2e-desktop.cjs [url]
 const { chromium } = require('playwright');
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 
-const URL = process.argv[2] || 'http://localhost:8524/index.html';
+const suppliedUrl = process.argv[2];
+const submissionDir = path.resolve('astro-merge');
 const targets = [
   { name: '1280x720', width: 1280, height: 720, shots: true },
   { name: '1920x1080', width: 1920, height: 1080, shots: true },
@@ -18,14 +20,43 @@ function check(name, ok, detail = '') {
 
 fs.mkdirSync(path.join('qa', 'desktop'), { recursive: true });
 ;(async () => {
-const browser = await chromium.launch({ headless: true, executablePath: '/usr/bin/google-chrome' });
+let server;
+let url = suppliedUrl;
+if (!url) {
+  // The build's checked-in submission bundle is the artifact under test. Use
+  // an ephemeral local server so this gate never accidentally tests a stale
+  // preview process from another worktree.
+  server = http.createServer((request, response) => {
+    const requestPath = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
+    const relativePath = requestPath === '/' ? 'index.html' : requestPath.replace(/^\/+/, '');
+    const filePath = path.resolve(submissionDir, relativePath);
+    if (!filePath.startsWith(`${submissionDir}${path.sep}`) && filePath !== submissionDir) {
+      response.writeHead(403).end();
+      return;
+    }
+    fs.readFile(filePath, (error, content) => {
+      if (error) { response.writeHead(404).end(); return; }
+      const type = filePath.endsWith('.js') ? 'text/javascript' : 'text/html';
+      response.writeHead(200, { 'Content-Type': `${type}; charset=utf-8` });
+      response.end(content);
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  url = `http://127.0.0.1:${server.address().port}/index.html`;
+}
+let browser;
 
+try {
+browser = await chromium.launch({ headless: true, executablePath: '/usr/bin/google-chrome' });
 for (const target of targets) {
   const errors = [];
   const page = await browser.newPage({ viewport: { width: target.width, height: target.height }, deviceScaleFactor: 1 });
   page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
   page.on('console', m => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
-  await page.goto(`${URL}?debug=1`, { waitUntil: 'load' });
+  await page.goto(`${url}?debug=1`, { waitUntil: 'load' });
   await page.waitForFunction(() => window.__astroReady === true, null, { timeout: 10000 });
   await page.waitForTimeout(700);
 
@@ -77,7 +108,10 @@ for (const target of targets) {
   await page.close();
 }
 
-await browser.close();
 console.log(failed ? `${failed} PRESENTATION GATES FAILED` : 'ALL PRESENTATION GATES PASSED');
-process.exit(failed ? 1 : 0);
-})().catch(err => { console.error(err); process.exit(1); });
+if (failed) process.exitCode = 1;
+} finally {
+  if (browser) await browser.close();
+  if (server) await new Promise(resolve => server.close(resolve));
+}
+})().catch(err => { console.error(err); process.exitCode = 1; });
