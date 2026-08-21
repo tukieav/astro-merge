@@ -8,9 +8,17 @@ const path = require('path');
 const suppliedUrl = process.argv[2];
 const submissionDir = path.resolve('astro-merge');
 const targets = [
-  { name: '1280x720', width: 1280, height: 720, shots: true },
+  { name: '907x510', width: 907, height: 510, shots: true },
+  { name: '1216x684', width: 1216, height: 684 },
+  { name: '1077x606', width: 1077, height: 606 },
+  { name: '821x462', width: 821, height: 462 },
+  { name: '1366x768', width: 1366, height: 768 },
   { name: '1920x1080', width: 1920, height: 1080, shots: true },
-  { name: '390x844', width: 390, height: 844, shots: false },
+  { name: '1536x864', width: 1536, height: 864 },
+  { name: '1280x720', width: 1280, height: 720, shots: true },
+  { name: '800x450', width: 800, height: 450 },
+  { name: '1080x607', width: 1080, height: 607 },
+  { name: '390x844', width: 390, height: 844, shots: true, touch: true },
 ];
 let failed = 0;
 function check(name, ok, detail = '') {
@@ -53,7 +61,8 @@ try {
 browser = await chromium.launch({ headless: true, executablePath: '/usr/bin/google-chrome' });
 for (const target of targets) {
   const errors = [];
-  const page = await browser.newPage({ viewport: { width: target.width, height: target.height }, deviceScaleFactor: 1 });
+  const context = await browser.newContext({ viewport: { width: target.width, height: target.height }, deviceScaleFactor: 1, hasTouch: !!target.touch });
+  const page = await context.newPage();
   page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
   page.on('console', m => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
   await page.goto(`${url}?debug=1`, { waitUntil: 'load' });
@@ -87,10 +96,17 @@ for (const target of targets) {
   if (target.shots) await page.screenshot({ path: path.join('qa', 'desktop', `${target.name}-menu.png`) });
 
   // The play target lies inside the central chamber at every viewport.
-  await page.mouse.click(target.width / 2, target.height * 0.67);
+  if (target.touch) await page.touchscreen.tap(target.width / 2, target.height * 0.67);
+  else await page.mouse.click(target.width / 2, target.height * 0.67);
   await page.waitForFunction(() => window.__astro.getState().state === 'playing', null, { timeout: 3000 });
   const game = await page.evaluate(() => ({ state: window.__astro.getState().state, buttons: window.__astro.buttons() }));
   check(`${target.name} gameplay starts`, game.state === 'playing');
+  if (target.touch) {
+    await page.touchscreen.tap(target.width / 2, target.height * 0.25);
+    await page.waitForTimeout(520);
+    const dropped = await page.evaluate(() => window.__astro.getState().planets >= 2);
+    check(`${target.name} touch drop works`, dropped);
+  }
   if (target.width > 600) {
     check(`${target.name} desktop controls available`, ['SHOP', 'GOALS', 'DEX'].every(x => game.buttons.includes(x)), game.buttons.join(', '));
     const opened = await page.evaluate(() => window.__astro.pressButton('SHOP'));
@@ -99,13 +115,17 @@ for (const target of targets) {
     check(`${target.name} SHOP usable`, opened && overlay === 'shop');
     await page.evaluate(() => window.__astro.closeOverlay());
   }
+  const controls = await page.evaluate(() => window.__astro.buttonRects());
+  const visible = controls.every(b => b.x >= 0 && b.y >= 0 && b.x + b.w <= target.width && b.y + b.h <= target.height);
+  const mobileSize = target.width <= 600 ? controls.every(b => b.w >= 44 && b.h >= 44) : true;
+  check(`${target.name} controls visible`, visible && mobileSize, controls.map(b => `${b.label}:${Math.round(b.w)}x${Math.round(b.h)}`).join(', '));
   if (target.shots) {
     await page.evaluate(() => { window.__astro.spawn(3, 190, 620); window.__astro.spawn(3, 210, 620); });
     await page.waitForTimeout(550);
     await page.screenshot({ path: path.join('qa', 'desktop', `${target.name}-gameplay.png`) });
   }
   check(`${target.name} zero errors`, errors.length === 0, errors.slice(0, 2).join(' | '));
-  await page.close();
+  await context.close();
 }
 
 console.log(failed ? `${failed} PRESENTATION GATES FAILED` : 'ALL PRESENTATION GATES PASSED');

@@ -1,5 +1,6 @@
 // Record gameplay preview videos: landscape 1280x720 and portrait 720x1280, <20s
 import { chromium } from 'playwright';
+import { execFileSync } from 'node:child_process';
 const URL = process.env.ASTRO_MERGE_URL || 'http://localhost:8524/index.html';
 
 async function record(w, h, out) {
@@ -13,7 +14,8 @@ async function record(w, h, out) {
   await page.waitForFunction(() => window.__astroReady === true);
   await page.waitForTimeout(1200); // menu with animated solar system
   const b = await page.locator('#game').boundingBox();
-  await page.mouse.click(b.x + b.width / 2, b.y + b.height * 0.66);
+  await page.evaluate(() => window.__astro.pressButton('PLAY'));
+  await page.waitForFunction(() => window.__astro.getState().state === 'playing');
   await page.waitForTimeout(500);
   // scripted juicy session: drops + forced merges
   const gx = (x) => b.x + (x / 520) * b.width;
@@ -47,6 +49,14 @@ async function record(w, h, out) {
   return path;
 }
 
-const land = await record(1280, 720, 'landscape');
-const port = await record(720, 1280, 'portrait');
-console.log(JSON.stringify({ land, port }));
+const requested = process.argv[2] || 'both';
+const result = {};
+if (requested === 'both' || requested === 'landscape') {
+  result.land = await record(1280, 720, 'landscape');
+  execFileSync('ffmpeg', ['-y', '-i', result.land, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', 'marketing/video-landscape.mp4'], { stdio: 'inherit' });
+}
+if (requested === 'both' || requested === 'portrait') {
+  result.port = await record(720, 1280, 'portrait');
+  execFileSync('ffmpeg', ['-y', '-i', result.port, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', 'marketing/video-portrait.mp4'], { stdio: 'inherit' });
+}
+console.log(JSON.stringify(result));

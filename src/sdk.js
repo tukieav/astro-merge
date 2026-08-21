@@ -1,6 +1,8 @@
 // CrazyGames SDK v3 wrapper — safe no-op fallbacks when SDK unavailable (local dev)
 let sdk = null;
 let inited = false;
+let lastHappytime = -Infinity;
+let gameplayRunning = false;
 
 export async function initSDK() {
   try {
@@ -23,10 +25,14 @@ export async function initSDK() {
 export function sdkAvailable() { return inited; }
 
 export function gameplayStart() {
+  if (gameplayRunning) return;
+  gameplayRunning = true;
   try { if (sdk) sdk.game.gameplayStart(); } catch (e) {}
 }
 
 export function gameplayStop() {
+  if (!gameplayRunning) return;
+  gameplayRunning = false;
   try { if (sdk) sdk.game.gameplayStop(); } catch (e) {}
 }
 
@@ -39,6 +45,9 @@ export function loadingStop() {
 }
 
 export function happytime() {
+  const now = performance.now();
+  if (now - lastHappytime < 6000) return;
+  lastHappytime = now;
   try { if (sdk) sdk.game.happytime(); } catch (e) {}
 }
 
