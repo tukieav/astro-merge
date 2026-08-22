@@ -114,6 +114,66 @@ check('unlock persisted in state', st.unlocks.neon === true && st.skin === 'neon
 // buy powerups and use them
 await page.evaluate(() => { window.__astro.buy('undo'); window.__astro.buy('bomb'); window.__astro.buy('next2'); });
 
+// Regression: opening a station panel must freeze an active chamber, including
+// its loss grace. Before the fix, overlay time was charged on the next tick.
+const overlayGrace = await page.evaluate(() => {
+  const a = window.__astro;
+  a.restart();
+  for (const x of [120, 260, 400]) a.spawn(10, x, 580);
+  a.spawn(5, 260, 105);
+  a.advance(1.5);
+  const before = a.getState();
+  a.openOverlay('shop');
+  a.advance(4);
+  const during = a.getState();
+  a.closeOverlay();
+  a.advance(0.1);
+  const after = a.getState();
+  return { before, during, after };
+});
+check('shop pause preserves chamber-loss grace',
+  overlayGrace.before.state === 'playing' && overlayGrace.during.paused &&
+  overlayGrace.during.simTime === overlayGrace.before.simTime && overlayGrace.after.state === 'playing',
+  `${Math.round(overlayGrace.before.simTime)} -> ${Math.round(overlayGrace.during.simTime)} -> ${overlayGrace.after.state}`);
+
+// Regression: an owned Nova explains its three-planet requirement, cannot
+// silently consume itself early, and activates once its condition is met.
+await page.evaluate(() => window.__astro.restart());
+await page.waitForTimeout(100);
+const nova = await page.evaluate(() => {
+  const a = window.__astro;
+  const before = a.getState();
+  const unavailableLabel = a.buttons().includes('NOVA · 3+');
+  const early = a.useBomb();
+  const afterEarly = a.getState();
+  a.spawn(0, 90, 600); a.spawn(0, 430, 600);
+  const used = a.useBomb();
+  const afterUse = a.getState();
+  return { before, unavailableLabel, early, afterEarly, used, afterUse };
+});
+check('Nova communicates its minimum and rejects an early use',
+  nova.unavailableLabel && nova.early === false && nova.afterEarly.bombLeft === nova.before.bombLeft && nova.afterEarly.planets === nova.before.planets,
+  `label=${nova.unavailableLabel} early=${nova.early}`);
+check('Nova consumes only after clearing three planets', nova.used === true && nova.afterUse.bombLeft === 0 && nova.afterUse.planets === 0,
+  `used=${nova.used} planets=${nova.afterUse.planets}`);
+
+// Regression: simultaneous merge rewards reserve distinct readable slots.
+const cascadeLabels = await page.evaluate(() => {
+  const a = window.__astro;
+  a.restart();
+  for (let i = 0; i < 4; i++) { a.spawn(0, 245 + i * 5, 600); a.spawn(0, 250 + i * 5, 600); }
+  a.advance(0.4);
+  const labels = a.getState().floatTexts;
+  const overlaps = (items) => items.some((one, i) => items.slice(i + 1).some(two =>
+    Math.abs(one.x - two.x) < (one.w + two.w) / 2 + 8 && Math.abs(one.y - two.y) < (one.h + two.h) / 2 + 6));
+  // Negative control: a mutation that puts the same rewards in one unreserved
+  // origin must fail, proving this fixture would catch the old text clump.
+  const singleLaneMutation = labels.map(label => ({ ...label, x: 260, y: 360 }));
+  return { count: labels.length, overlaps: overlaps(labels), mutationOverlaps: overlaps(singleLaneMutation) };
+});
+check('cascade reward labels do not overlap', cascadeLabels.count >= 4 && !cascadeLabels.overlaps, JSON.stringify(cascadeLabels));
+check('negative control catches unreserved reward labels', cascadeLabels.mutationOverlaps, JSON.stringify(cascadeLabels));
+
 // overlays render
 for (const o of ['shop', 'missions', 'dex']) {
   await page.evaluate(ov => window.__astro.openOverlay(ov), o);

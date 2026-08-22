@@ -12,7 +12,6 @@ async function record(w, h, out) {
   const page = await ctx.newPage();
   await page.goto(URL + '?debug=1', { waitUntil: 'load' });
   await page.waitForFunction(() => window.__astroReady === true);
-  await page.waitForTimeout(1200); // menu with animated solar system
   const b = await page.locator('#game').boundingBox();
   await page.evaluate(() => window.__astro.pressButton('PLAY'));
   await page.waitForFunction(() => window.__astro.getState().state === 'playing');
@@ -53,10 +52,11 @@ const requested = process.argv[2] || 'both';
 const result = {};
 if (requested === 'both' || requested === 'landscape') {
   result.land = await record(1280, 720, 'landscape');
-  execFileSync('ffmpeg', ['-y', '-i', result.land, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', 'marketing/video-landscape.mp4'], { stdio: 'inherit' });
+  // Drop initial navigation frames so the published clip opens in gameplay.
+  execFileSync('ffmpeg', ['-y', '-ss', '1', '-i', result.land, '-t', '19', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', 'marketing/video-landscape.mp4'], { stdio: 'inherit' });
 }
 if (requested === 'both' || requested === 'portrait') {
   result.port = await record(720, 1280, 'portrait');
-  execFileSync('ffmpeg', ['-y', '-i', result.port, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', 'marketing/video-portrait.mp4'], { stdio: 'inherit' });
+  execFileSync('ffmpeg', ['-y', '-ss', '1', '-i', result.port, '-t', '19', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', 'marketing/video-portrait.mp4'], { stdio: 'inherit' });
 }
 console.log(JSON.stringify(result));
