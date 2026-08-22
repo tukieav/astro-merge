@@ -5,7 +5,7 @@ import * as cg from './sdk.js';
 const KEY = 'meta';
 
 export const state = {
-  version: 2,
+  version: 3,
   stardust: 0,
   totalRuns: 0,
   totalMerges: 0,
@@ -17,6 +17,7 @@ export const state = {
   lastDay: '',
   bestCombo: 0,
   music: true,
+  onboardingComplete: false,
 };
 
 export const MISSIONS = [
@@ -59,7 +60,7 @@ function number(value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) {
 function migrate(saved) {
   if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
   const safe = {
-    version: 2,
+    version: 3,
     stardust: number(saved.stardust, 0),
     totalRuns: number(saved.totalRuns, 0),
     totalMerges: number(saved.totalMerges, 0),
@@ -69,6 +70,7 @@ function migrate(saved) {
     lastDay: typeof saved.lastDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(saved.lastDay) ? saved.lastDay : '',
     bestCombo: number(saved.bestCombo, 0, 0, 999),
     music: typeof saved.music === 'boolean' ? saved.music : true,
+    onboardingComplete: !!saved.onboardingComplete,
   };
   for (const id of Object.keys(state.unlocks)) safe.unlocks[id] = !!saved.unlocks?.[id];
   for (const [id, value] of Object.entries(saved.missionsDone || {})) if (typeof value === 'boolean') safe.missionsDone[id] = value;
@@ -121,6 +123,14 @@ export function recordCombo(c) {
 export function recordRunEnd(score) {
   state.totalRuns++;
   markDirty();
+  save();
+}
+
+// The visual first-drop cue is intentionally a one-time affordance. Persist
+// completion immediately so a restart or reload cannot turn it into a loop.
+export function completeOnboarding() {
+  if (state.onboardingComplete) return;
+  state.onboardingComplete = true;
   save();
 }
 

@@ -128,6 +128,7 @@ let lossReason = '';
 let reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false;
 let mergeTelegraphs = [];
 let chainPaths = [];
+let hitStopUntil = 0;
 
 // skin palettes: id -> tier color overrides
 const SKINS = {
@@ -266,6 +267,9 @@ function processMerges() {
     addFloatText(mx, my, nt, `+${gained}${combo > 1 ? '  x' + combo : ''}`, combo > 2);
     chainPaths.push({ x0: a.body.position.x, y0: a.body.position.y, x1: b.body.position.x, y1: b.body.position.y, life: 0.8, color: TIERS[nt].c1 });
     shake = Math.min(16, 2 + nt * 0.8 + (combo >= 5 ? 6 + combo : 0));
+    // A short real-time pause gives a 3+ cascade a clean impact frame without
+    // making controls feel sticky. It is deliberately capped below 80ms.
+    if (combo >= 3 && !reducedMotion) hitStopUntil = Math.max(hitStopUntil, performance.now() + 65);
     if (nt >= 8) { audio.bigMergeSound(); cg.happytime(); }
     else audio.popSound(nt, combo);
   }
@@ -377,6 +381,10 @@ function pointerUp(clientX = null, clientY = null) {
   audio.unlockAudio();
   canDrop = false;
   const dropped = spawnPlanet(currentTier, dropX, DROP_Y);
+  if (!meta.state.onboardingComplete) {
+    tutorialUntil = 0;
+    meta.completeOnboarding();
+  }
   lastDrop = { planet: dropped, prevCurrent: currentTier, prevNext: nextTier, prevNext2: nextTier2 };
   audio.dropSound();
   currentTier = nextTier;
@@ -435,12 +443,23 @@ canvas.addEventListener('touchend', e => {
   handleClick(t.clientX, t.clientY);
 }, { passive: false });
 
-// keyboard controls (desktop): arrows move, space/enter drops
+// Keyboard support complements the mouse-first design. Physical key codes keep
+// the cluster usable on AZERTY layouts (labels change, the key position does not).
 const keysHeld = {};
 window.addEventListener('keydown', (e) => {
   if (paused) return;
-  if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') { keysHeld[e.code] = true; e.preventDefault(); }
-  if (e.code === 'Space' || e.code === 'Enter' || e.code === 'ArrowDown') {
+  if (overlay && (e.code === 'Escape' || e.code === 'Backspace')) {
+    e.preventDefault();
+    closeOverlay();
+    return;
+  }
+  if (e.code === 'ArrowLeft' || e.code === 'ArrowRight' || e.code === 'KeyA' || e.code === 'KeyD') {
+    keysHeld[e.code] = true;
+    e.preventDefault();
+  }
+  if (e.code === 'KeyU') { e.preventDefault(); if (!e.repeat) useUndo(); return; }
+  if (e.code === 'KeyB') { e.preventDefault(); if (!e.repeat) useBomb(); return; }
+  if (e.code === 'Space' || e.code === 'Enter' || e.code === 'ArrowDown' || e.code === 'KeyW' || e.code === 'KeyS') {
     e.preventDefault();
     if (overlay) { closeOverlay(); return; }
     pointerUp();
@@ -450,8 +469,8 @@ window.addEventListener('keyup', (e) => { delete keysHeld[e.code]; });
 function keyboardMove(dt) {
   if (state !== 'playing' || overlay) return;
   const sp = 420 * dt;
-  if (keysHeld['ArrowLeft']) dropX = clampDropX(dropX - sp, currentTier);
-  if (keysHeld['ArrowRight']) dropX = clampDropX(dropX + sp, currentTier);
+  if (keysHeld['ArrowLeft'] || keysHeld['KeyA']) dropX = clampDropX(dropX - sp, currentTier);
+  if (keysHeld['ArrowRight'] || keysHeld['KeyD']) dropX = clampDropX(dropX + sp, currentTier);
 }
 
 // button hitboxes (set during render)
@@ -476,7 +495,7 @@ function startGame() {
   nextTier = 0;
   nextTier2 = randTier();
   spawnPlanet(0, GAME_W / 2, GAME_H - TIERS[0].r - 12);
-  tutorialUntil = simTime + 30000;
+  tutorialUntil = meta.state.onboardingComplete ? 0 : simTime + 30000;
   tutorialMerged = false;
   state = 'playing';
   cg.gameplayStart();
@@ -655,6 +674,31 @@ function drawLabel(text, x, y, size = 13, color = 'rgba(205,225,255,0.68)', alig
   g.fillText(text, x, y);
 }
 
+function drawMenuLogo(now) {
+  const cx = GAME_W / 2;
+  g.save();
+  // A small orbital mark anchors a custom, two-line title rather than leaving
+  // the menu as plain system text.
+  g.translate(cx, 392);
+  g.strokeStyle = 'rgba(123,185,255,0.72)'; g.lineWidth = 2;
+  g.beginPath(); g.ellipse(0, 0, 174, 27, -0.14, 0, Math.PI * 2); g.stroke();
+  const phase = now * 0.0011;
+  const dotX = Math.cos(phase) * 174, dotY = Math.sin(phase) * 27;
+  g.fillStyle = '#ffd84a'; g.shadowColor = '#ffd84a'; g.shadowBlur = 14;
+  g.beginPath(); g.arc(dotX, dotY, 5, 0, Math.PI * 2); g.fill();
+  g.shadowBlur = 0;
+  const title = g.createLinearGradient(0, -42, 0, 37);
+  title.addColorStop(0, '#ffffff'); title.addColorStop(0.52, '#b8d7ff'); title.addColorStop(1, '#6f94ff');
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = "900 48px 'Segoe UI', sans-serif";
+  g.lineWidth = 7; g.strokeStyle = '#17245f'; g.strokeText('ASTRO', 0, -23);
+  g.fillStyle = title; g.fillText('ASTRO', 0, -23);
+  g.font = "900 44px 'Segoe UI', sans-serif";
+  g.lineWidth = 7; g.strokeStyle = '#17245f'; g.strokeText('MERGE', 0, 25);
+  g.fillStyle = '#f7fbff'; g.fillText('MERGE', 0, 25);
+  g.restore();
+}
+
 function drawSideCard(x, y, w, h, title, accent = '#6fa8ff') {
   art.glassPanel(g, x, y, w, h, 18);
   g.fillStyle = accent;
@@ -768,7 +812,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   const elapsed = Math.min(MAX_CATCHUP_MS, Math.max(0, now - lastTime));
   lastTime = now;
-  if (!paused) {
+  if (!paused && now >= hitStopUntil) {
     physicsAccumulator += elapsed;
     while (physicsAccumulator + 1e-7 >= FIXED_STEP_MS) {
       advanceSimulation();
@@ -932,9 +976,9 @@ function render(now) {
       const bob = Math.sin(now / 300) * 2;
       drawPlanet(dropX, DROP_Y + bob, 0, currentTier, 0.95, 1, 1, now);
     }
-    // A compact, animated first-action cue replaces a text tutorial. It fades
-    // after the first merge or 30 seconds, whichever comes first.
-    if (!tutorialMerged && simTime < tutorialUntil) {
+    // First-run, in-play visual onboarding. It intentionally uses two concise
+    // labels plus a click gesture, and permanently clears after one valid drop.
+    if (simTime < tutorialUntil) {
       const pulse = 0.5 + 0.5 * Math.sin(now / 260);
       const targetY = GAME_H - TIERS[0].r - 42;
       g.save();
@@ -948,9 +992,16 @@ function render(now) {
       g.setLineDash([]);
       g.fillStyle = '#ffd84a';
       g.beginPath(); g.moveTo(GAME_W / 2 - 8, targetY - 21); g.lineTo(GAME_W / 2 + 8, targetY - 21); g.lineTo(GAME_W / 2, targetY - 8); g.closePath(); g.fill();
-      art.glassPanel(g, GAME_W / 2 - 142, 150, 284, 48, 14);
-      g.fillStyle = '#fff'; g.font = "bold 16px 'Segoe UI', sans-serif"; g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText('DROP ON THE GLOWING PLANET', GAME_W / 2, 174);
+      art.glassPanel(g, GAME_W / 2 - 145, 142, 290, 72, 14);
+      // Simple mouse/touch gesture glyph: cursor, press ripple and drop path.
+      g.globalAlpha = 0.92;
+      g.fillStyle = '#dceaff';
+      g.beginPath(); g.moveTo(GAME_W / 2 - 112, 160); g.lineTo(GAME_W / 2 - 112, 189); g.lineTo(GAME_W / 2 - 104, 181); g.lineTo(GAME_W / 2 - 98, 194); g.lineTo(GAME_W / 2 - 92, 191); g.lineTo(GAME_W / 2 - 99, 176); g.lineTo(GAME_W / 2 - 88, 176); g.closePath(); g.fill();
+      g.strokeStyle = '#ffd84a'; g.lineWidth = 2; g.beginPath(); g.arc(GAME_W / 2 - 107, 168, 14 + pulse * 4, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = '#fff'; g.font = "bold 15px 'Segoe UI', sans-serif"; g.textAlign = 'left'; g.textBaseline = 'middle';
+      g.fillText('CLICK A COLUMN TO DROP', GAME_W / 2 - 80, 165);
+      g.fillStyle = '#ffd84a'; g.font = "bold 13px 'Segoe UI', sans-serif";
+      g.fillText('MATCH THE GLOWING PLUTO', GAME_W / 2 - 80, 188);
       g.restore();
     }
     // HUD
@@ -1041,23 +1092,11 @@ function render(now) {
         g.restore();
       }
     }
-    g.save();
-    g.shadowColor = '#6a8dff';
-    g.shadowBlur = 26;
-    g.fillStyle = '#fff';
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.font = "bold 54px 'Segoe UI', sans-serif";
-    g.fillText('ASTRO MERGE', GAME_W / 2, 420);
-    g.shadowBlur = 0;
-    const tg = g.createLinearGradient(0, 400, 0, 445);
-    tg.addColorStop(0, 'rgba(255,255,255,0)');
-    tg.addColorStop(1, 'rgba(110,150,255,0.35)');
-    g.fillStyle = tg;
-    g.fillText('ASTRO MERGE', GAME_W / 2, 420);
-    g.restore();
+    drawMenuLogo(now);
     g.font = "20px 'Segoe UI', sans-serif";
     g.fillStyle = 'rgba(255,255,255,0.75)';
-    g.fillText('Merge planets. Build the Sun.', GAME_W / 2, 465);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('Merge planets. Build the Sun.', GAME_W / 2, 470);
     drawButton(GAME_W / 2 - 110, 500, 220, 64, 'PLAY', startGame, '#37b24d');
     drawButton(GAME_W / 2 - 165, 585, 100, 46, 'SHOP', () => openOverlay('shop'), '#5f3dc4');
     drawButton(GAME_W / 2 - 50, 585, 100, 46, 'GOALS', () => openOverlay('missions'), '#1971c2');
@@ -1270,6 +1309,8 @@ if (location.search.includes('debug=1')) {
       missionsDone: Object.keys(meta.state.missionsDone).length,
       totalRuns: meta.state.totalRuns, totalMerges: meta.state.totalMerges,
       undoLeft, bombLeft, stardustEarned, paused, simTime,
+      hitStopRemaining: Math.max(0, hitStopUntil - performance.now()),
+      onboarding: simTime < tutorialUntil,
       tiers: planets.reduce((all, p) => { all[p.tier] = (all[p.tier] || 0) + 1; return all; }, {}),
       floatTexts: floatTexts.map(({ x, y, w, h, text }) => ({ x, y, w, h, text })),
       counts: { planets: planets.length, particles: particles.length, rings: rings.length, sparkles: sparkles.length, texts: floatTexts.length, telegraphs: mergeTelegraphs.length, queuedMerges: mergeQueue.length, listeners: 13, timers: 0 },

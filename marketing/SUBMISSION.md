@@ -16,14 +16,22 @@ Drop matching planets, trigger cosmic chain reactions, and grow a tiny Pluto int
 
 ## Full description
 
-Build a solar system one drop at a time. Guide each planet into the orbital
-chamber and merge matching worlds into larger celestial bodies. Smart placement
-creates chain reactions, combo multipliers, and valuable Stardust.
+One precise drop can turn a tidy orbit into a chain reaction. Guide planets
+into the chamber, match equal worlds, and make the space for the next merge
+before the pressure line fills.
 
-Complete mission goals, discover every planet in the DEX, unlock visual themes,
-and deploy tactical power-ups such as Undo Drop and Nova Bomb. Every run is
-quick to learn, but the crowded chamber creates increasingly difficult spatial
-decisions.
+Each run is a compact spatial-puzzle loop: aim a planet, drop it into a useful
+gap, read the magnetic merge preview, then react to the new size and trajectory.
+Combos multiply score, staged merge rings and paths make cascades legible, and
+the pressure projection gives a visible 2.5-second grace countdown before an
+overload. The opening places a matching Pluto in the chamber, so the first
+merge is clear without pausing play for a text tutorial.
+
+Progress persists between runs. Earn Stardust, complete mission goals, fill the
+Planet DEX, improve records and unlock Neon/Nova visual themes plus limited
+Undo Drop, Far Sight and Nova Bomb tools. A focused run is usually a few
+minutes, while a crowded late chamber rewards patient placement rather than
+fast clicking.
 
 ## Features
 
@@ -43,10 +51,12 @@ decisions.
 
 ## Controls
 
-- Desktop: move the mouse or use Left/Right arrows to aim; click, Space, Enter
-  or Down Arrow to drop.
-- Mobile: drag to aim and tap to drop. In-game touch controls are at least
-  44 CSS pixels tall when present.
+- Desktop: move the mouse to aim and click a column to drop. Keyboard support
+  uses physical codes: Left/Right or A/D from the WASD / ZQSD (AZERTY) cluster
+  aim; W/S, Space, Enter or Down Arrow drop; U undoes and B triggers Nova when
+  those owned tools are available.
+- Mobile: drag to aim and tap to drop. The first-run in-game gesture shows the
+  action visually, then dismisses after the first valid drop.
 
 ## CrazyGames SDK, data and ads
 
@@ -77,4 +87,3 @@ decisions.
 - Screenshots: `marketing/screenshot-menu.png`,
   `marketing/screenshot-gameplay.png`, `marketing/screenshot-action.png`
 - Videos: `marketing/video-landscape.mp4`, `marketing/video-portrait.mp4`
-
