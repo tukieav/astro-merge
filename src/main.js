@@ -680,7 +680,7 @@ function drawMenuLogo(now) {
   // A small orbital mark anchors a custom, two-line title rather than leaving
   // the menu as plain system text.
   g.translate(cx, 392);
-  g.strokeStyle = 'rgba(123,185,255,0.72)'; g.lineWidth = 2;
+  g.strokeStyle = 'rgba(210,240,255,0.84)'; g.lineWidth = 2.5;
   g.beginPath(); g.ellipse(0, 0, 174, 27, -0.14, 0, Math.PI * 2); g.stroke();
   const phase = now * 0.0011;
   const dotX = Math.cos(phase) * 174, dotY = Math.sin(phase) * 27;
@@ -688,14 +688,40 @@ function drawMenuLogo(now) {
   g.beginPath(); g.arc(dotX, dotY, 5, 0, Math.PI * 2); g.fill();
   g.shadowBlur = 0;
   const title = g.createLinearGradient(0, -42, 0, 37);
-  title.addColorStop(0, '#ffffff'); title.addColorStop(0.52, '#b8d7ff'); title.addColorStop(1, '#6f94ff');
+  title.addColorStop(0, '#ffffff'); title.addColorStop(0.48, '#fff0a6'); title.addColorStop(1, '#78c9ff');
   g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.font = "900 48px 'Segoe UI', sans-serif";
-  g.lineWidth = 7; g.strokeStyle = '#17245f'; g.strokeText('ASTRO', 0, -23);
+  g.font = "900 52px 'Segoe UI', sans-serif";
+  g.lineWidth = 8; g.strokeStyle = '#253270'; g.strokeText('ASTRO', 0, -23);
   g.fillStyle = title; g.fillText('ASTRO', 0, -23);
-  g.font = "900 44px 'Segoe UI', sans-serif";
-  g.lineWidth = 7; g.strokeStyle = '#17245f'; g.strokeText('MERGE', 0, 25);
-  g.fillStyle = '#f7fbff'; g.fillText('MERGE', 0, 25);
+  g.font = "900 48px 'Segoe UI', sans-serif";
+  g.lineWidth = 8; g.strokeStyle = '#253270'; g.strokeText('MERGE', 0, 25);
+  g.fillStyle = '#fff3ac'; g.fillText('MERGE', 0, 25);
+  g.restore();
+}
+
+function drawMenuAtmosphere(now) {
+  // This is a menu-only daylight station wash. Gameplay retains its deep-space
+  // contrast, while the first frame carries the cover's energetic promise.
+  g.save();
+  g.globalCompositeOperation = 'screen';
+  const glow = g.createRadialGradient(GAME_W * 0.50, 225, 18, GAME_W * 0.50, 225, 390);
+  glow.addColorStop(0, 'rgba(255,226,116,0.36)');
+  glow.addColorStop(0.45, 'rgba(100,202,255,0.20)');
+  glow.addColorStop(1, 'rgba(100,202,255,0)');
+  g.fillStyle = glow; g.fillRect(0, 0, GAME_W, GAME_H);
+  g.globalAlpha = 0.15 + 0.04 * Math.sin(now / 900);
+  for (let i = -1; i <= 2; i++) {
+    const x = 30 + i * 175;
+    const beam = g.createLinearGradient(x, 0, x + 135, GAME_H);
+    beam.addColorStop(0, 'rgba(220,248,255,0.7)'); beam.addColorStop(1, 'rgba(135,190,255,0)');
+    g.fillStyle = beam; g.beginPath();
+    g.moveTo(x, 0); g.lineTo(x + 72, 0); g.lineTo(x + 250, GAME_H); g.lineTo(x + 145, GAME_H); g.closePath(); g.fill();
+  }
+  for (let i = 0; i < 8; i++) {
+    const x = 32 + (i * 71) % 480, y = 115 + (i * 113) % 570;
+    const pulse = 0.45 + 0.35 * Math.sin(now / 500 + i);
+    g.fillStyle = `rgba(255,240,166,${pulse})`; g.beginPath(); g.arc(x, y, 1.5 + (i % 2), 0, Math.PI * 2); g.fill();
+  }
   g.restore();
 }
 
@@ -1062,7 +1088,8 @@ function render(now) {
   }
 
   if (state === 'menu') {
-    g.fillStyle = 'rgba(4,6,15,0.45)';
+    drawMenuAtmosphere(now);
+    g.fillStyle = 'rgba(12,18,56,0.16)';
     g.fillRect(0, 0, GAME_W, GAME_H);
     // animated mini solar system: sun + orbiting planets
     {

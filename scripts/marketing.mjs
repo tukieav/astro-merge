@@ -42,6 +42,7 @@ async function cover(w, h, out, query = '') {
   console.log('cover', out);
 }
 await cover(1920, 1080, 'marketing/cover-16x9.png');
+await cover(800, 450, 'marketing/cover-16x9-small.png');
 await cover(800, 800, 'marketing/cover-1x1.png', '&sq=1');
 await cover(800, 1200, 'marketing/cover-2x3.png', '&portrait=1');
 

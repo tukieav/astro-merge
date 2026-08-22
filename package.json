@@ -8,6 +8,7 @@
     "build": "esbuild src/main.js --bundle --minify --outfile=dist/bundle.js && node scripts/pack.mjs",
     "dev": "esbuild src/main.js --bundle --outfile=dist/bundle.js --watch --servedir=dist",
     "test": "node scripts/e2e.mjs && node tools/e2e-desktop.cjs && node tools/test-refresh-rate.cjs && node tools/e2e-soak.cjs",
+    "test:cover": "node scripts/cover-brightness.mjs",
     "test:viewport": "node tools/e2e-desktop.cjs",
     "test:refresh": "node tools/test-refresh-rate.cjs",
     "test:soak": "node tools/e2e-soak.cjs"
