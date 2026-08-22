@@ -128,6 +128,7 @@ let lossReason = '';
 let reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || false;
 let mergeTelegraphs = [];
 let chainPaths = [];
+let hitStopUntil = 0;
 
 // skin palettes: id -> tier color overrides
 const SKINS = {
@@ -266,6 +267,9 @@ function processMerges() {
     addFloatText(mx, my, nt, `+${gained}${combo > 1 ? '  x' + combo : ''}`, combo > 2);
     chainPaths.push({ x0: a.body.position.x, y0: a.body.position.y, x1: b.body.position.x, y1: b.body.position.y, life: 0.8, color: TIERS[nt].c1 });
     shake = Math.min(16, 2 + nt * 0.8 + (combo >= 5 ? 6 + combo : 0));
+    // A short real-time pause gives a 3+ cascade a clean impact frame without
+    // making controls feel sticky. It is deliberately capped below 80ms.
+    if (combo >= 3 && !reducedMotion) hitStopUntil = Math.max(hitStopUntil, performance.now() + 65);
     if (nt >= 8) { audio.bigMergeSound(); cg.happytime(); }
     else audio.popSound(nt, combo);
   }
@@ -670,6 +674,31 @@ function drawLabel(text, x, y, size = 13, color = 'rgba(205,225,255,0.68)', alig
   g.fillText(text, x, y);
 }
 
+function drawMenuLogo(now) {
+  const cx = GAME_W / 2;
+  g.save();
+  // A small orbital mark anchors a custom, two-line title rather than leaving
+  // the menu as plain system text.
+  g.translate(cx, 392);
+  g.strokeStyle = 'rgba(123,185,255,0.72)'; g.lineWidth = 2;
+  g.beginPath(); g.ellipse(0, 0, 174, 27, -0.14, 0, Math.PI * 2); g.stroke();
+  const phase = now * 0.0011;
+  const dotX = Math.cos(phase) * 174, dotY = Math.sin(phase) * 27;
+  g.fillStyle = '#ffd84a'; g.shadowColor = '#ffd84a'; g.shadowBlur = 14;
+  g.beginPath(); g.arc(dotX, dotY, 5, 0, Math.PI * 2); g.fill();
+  g.shadowBlur = 0;
+  const title = g.createLinearGradient(0, -42, 0, 37);
+  title.addColorStop(0, '#ffffff'); title.addColorStop(0.52, '#b8d7ff'); title.addColorStop(1, '#6f94ff');
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = "900 48px 'Segoe UI', sans-serif";
+  g.lineWidth = 7; g.strokeStyle = '#17245f'; g.strokeText('ASTRO', 0, -23);
+  g.fillStyle = title; g.fillText('ASTRO', 0, -23);
+  g.font = "900 44px 'Segoe UI', sans-serif";
+  g.lineWidth = 7; g.strokeStyle = '#17245f'; g.strokeText('MERGE', 0, 25);
+  g.fillStyle = '#f7fbff'; g.fillText('MERGE', 0, 25);
+  g.restore();
+}
+
 function drawSideCard(x, y, w, h, title, accent = '#6fa8ff') {
   art.glassPanel(g, x, y, w, h, 18);
   g.fillStyle = accent;
@@ -783,7 +812,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   const elapsed = Math.min(MAX_CATCHUP_MS, Math.max(0, now - lastTime));
   lastTime = now;
-  if (!paused) {
+  if (!paused && now >= hitStopUntil) {
     physicsAccumulator += elapsed;
     while (physicsAccumulator + 1e-7 >= FIXED_STEP_MS) {
       advanceSimulation();
@@ -1063,23 +1092,11 @@ function render(now) {
         g.restore();
       }
     }
-    g.save();
-    g.shadowColor = '#6a8dff';
-    g.shadowBlur = 26;
-    g.fillStyle = '#fff';
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.font = "bold 54px 'Segoe UI', sans-serif";
-    g.fillText('ASTRO MERGE', GAME_W / 2, 420);
-    g.shadowBlur = 0;
-    const tg = g.createLinearGradient(0, 400, 0, 445);
-    tg.addColorStop(0, 'rgba(255,255,255,0)');
-    tg.addColorStop(1, 'rgba(110,150,255,0.35)');
-    g.fillStyle = tg;
-    g.fillText('ASTRO MERGE', GAME_W / 2, 420);
-    g.restore();
+    drawMenuLogo(now);
     g.font = "20px 'Segoe UI', sans-serif";
     g.fillStyle = 'rgba(255,255,255,0.75)';
-    g.fillText('Merge planets. Build the Sun.', GAME_W / 2, 465);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('Merge planets. Build the Sun.', GAME_W / 2, 470);
     drawButton(GAME_W / 2 - 110, 500, 220, 64, 'PLAY', startGame, '#37b24d');
     drawButton(GAME_W / 2 - 165, 585, 100, 46, 'SHOP', () => openOverlay('shop'), '#5f3dc4');
     drawButton(GAME_W / 2 - 50, 585, 100, 46, 'GOALS', () => openOverlay('missions'), '#1971c2');
@@ -1292,6 +1309,7 @@ if (location.search.includes('debug=1')) {
       missionsDone: Object.keys(meta.state.missionsDone).length,
       totalRuns: meta.state.totalRuns, totalMerges: meta.state.totalMerges,
       undoLeft, bombLeft, stardustEarned, paused, simTime,
+      hitStopRemaining: Math.max(0, hitStopUntil - performance.now()),
       onboarding: simTime < tutorialUntil,
       tiers: planets.reduce((all, p) => { all[p.tier] = (all[p.tier] || 0) + 1; return all; }, {}),
       floatTexts: floatTexts.map(({ x, y, w, h, text }) => ({ x, y, w, h, text })),
