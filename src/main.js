@@ -263,13 +263,46 @@ function processMerges() {
     }
     // fx
     mergeFX(mx, my, nt, combo);
-    const lane = (floatTexts.length % 3) - 1;
-    floatTexts.push({ x: mx + lane * 38, y: my - TIERS[nt].r - (lane === 0 ? 0 : 18), text: `+${gained}${combo > 1 ? '  x' + combo : ''}`, life: 1.2, big: combo > 2 });
+    addFloatText(mx, my, nt, `+${gained}${combo > 1 ? '  x' + combo : ''}`, combo > 2);
     chainPaths.push({ x0: a.body.position.x, y0: a.body.position.y, x1: b.body.position.x, y1: b.body.position.y, life: 0.8, color: TIERS[nt].c1 });
     shake = Math.min(16, 2 + nt * 0.8 + (combo >= 5 ? 6 + combo : 0));
     if (nt >= 8) { audio.bigMergeSound(); cg.happytime(); }
     else audio.popSound(nt, combo);
   }
+}
+
+function addFloatText(x, y, tier, text, big) {
+  const size = big ? 30 : 22;
+  g.save();
+  g.font = `bold ${size}px 'Segoe UI', sans-serif`;
+  const w = Math.ceil(g.measureText(text).width);
+  g.restore();
+  const h = size + 6;
+  const baseY = y - TIERS[tier].r - 14;
+  // A small deterministic grid reserves room around a cascade. Labels keep
+  // their slot as they rise, so a high-combo payout remains readable instead
+  // of briefly becoming a single bright clump.
+  const lanes = [0, -1, 1, -2, 2, -3, 3];
+  let slot = null;
+  for (let row = 0; row < 5 && !slot; row++) {
+    for (const lane of lanes) {
+      const candidate = {
+        x: Math.max(w / 2 + 10, Math.min(GAME_W - w / 2 - 10, x + lane * 68)),
+        y: Math.max(DANGER_Y + h, baseY - row * (h + 8)),
+      };
+      const clearOfLabels = floatTexts.every(other =>
+        Math.abs(candidate.x - other.x) >= (w + other.w) / 2 + 8 ||
+        Math.abs(candidate.y - other.y) >= (h + other.h) / 2 + 6);
+      const textRadius = Math.max(w, h) / 2 + 12;
+      const clearOfEffects = flashes.every(f => Math.hypot(candidate.x - f.x, candidate.y - f.y) > f.r * 1.3 + textRadius) &&
+        rings.every(r => Math.hypot(candidate.x - r.x, candidate.y - r.y) > r.r1 + textRadius);
+      if (clearOfLabels && clearOfEffects) { slot = candidate; break; }
+    }
+  }
+  // The list is capped below, but keep a useful fallback if an extreme chain
+  // fills every preferred slot.
+  slot ||= { x: Math.max(w / 2 + 10, Math.min(GAME_W - w / 2 - 10, x)), y: Math.max(DANGER_Y + h, baseY - 5 * (h + 8)) };
+  floatTexts.push({ ...slot, w, h, text, life: 1.2, big });
 }
 
 // ---------- Particles ----------
@@ -373,7 +406,12 @@ function useUndo() {
 
 // NOVA BOMB power-up: clear the 3 smallest planets
 function useBomb() {
-  if (state !== 'playing' || bombLeft <= 0 || planets.length < 3) return;
+  if (state !== 'playing' || bombLeft <= 0) return false;
+  if (planets.length < 3) {
+    toast('NOVA needs 3 planets');
+    audio.warnSound();
+    return false;
+  }
   const sorted = [...planets].sort((a, b) => a.tier - b.tier).slice(0, 3);
   for (const p of sorted) {
     burstParticles(p.body.position.x, p.body.position.y, '#ffd84a', TIERS[p.tier].r * 1.5);
@@ -383,6 +421,7 @@ function useBomb() {
   bombLeft--;
   shake = 8;
   audio.bigMergeSound();
+  return true;
 }
 
 canvas.addEventListener('mousemove', e => pointerMove(e.clientX));
@@ -403,7 +442,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') { keysHeld[e.code] = true; e.preventDefault(); }
   if (e.code === 'Space' || e.code === 'Enter' || e.code === 'ArrowDown') {
     e.preventDefault();
-    if (overlay) { overlay = null; return; }
+    if (overlay) { closeOverlay(); return; }
     pointerUp();
   }
 });
@@ -429,6 +468,7 @@ function handleClick(clientX, clientY) {
 
 // ---------- Game flow ----------
 function startGame() {
+  closeOverlay();
   reset();
   // The opening is intentionally authored: a waiting Pluto plus the same
   // first drop guarantees a satisfying merge in the first interaction.
@@ -446,7 +486,7 @@ async function gameOver() {
   if (state !== 'playing') return;
   state = 'gameover';
   gameOverAt = simTime;
-  overlay = null;
+  if (overlay) closeOverlay();
   audio.gameOverSound();
   cg.gameplayStop();
   if (score > best) {
@@ -528,7 +568,7 @@ function checkDanger(now) {
   if (anyAbove && Math.floor(now / 500) !== Math.floor((now - FIXED_STEP_MS) / 500)) audio.warnSound();
 }
 
-function setPaused(reason, shouldPause) {
+function setPaused(reason, shouldPause, reportLifecycle = true) {
   if (shouldPause) pauseReasons.add(reason); else pauseReasons.delete(reason);
   const next = pauseReasons.size > 0;
   if (next === paused) return;
@@ -536,12 +576,24 @@ function setPaused(reason, shouldPause) {
   for (const key of Object.keys(keysHeld)) delete keysHeld[key];
   if (paused) {
     audio.suspend();
-    if (state === 'playing') cg.gameplayStop();
+    if (state === 'playing' && reportLifecycle) cg.gameplayStop();
   } else {
     lastTime = performance.now();
     audio.resume();
-    if (state === 'playing') cg.gameplayStart();
+    if (state === 'playing' && reportLifecycle) cg.gameplayStart();
   }
+}
+
+function openOverlay(name) {
+  overlay = name;
+  // A station panel is a deliberate decision pause: do not charge the chamber
+  // grace clock while the player is comparing an upgrade or goal.
+  setPaused('overlay', state === 'playing', false);
+}
+
+function closeOverlay() {
+  overlay = null;
+  setPaused('overlay', false, false);
 }
 
 window.addEventListener('blur', () => setPaused('blur', true));
@@ -663,9 +715,9 @@ function drawDesktopUI(now) {
   const controlsY = Math.min(viewH - 146, titleY + 340);
   drawSideCard(rx, controlsY, rpW, 126, 'STATION ACCESS', '#78a8ff');
   const bw = Math.floor((rpW - 48) / 3);
-  drawButton(rx + 16, controlsY + 53, bw, 52, 'SHOP', () => { overlay = 'shop'; }, '#8f6dff');
-  drawButton(rx + 24 + bw, controlsY + 53, bw, 52, 'GOALS', () => { overlay = 'missions'; }, '#4da8ff');
-  drawButton(rx + 32 + bw * 2, controlsY + 53, bw, 52, 'DEX', () => { overlay = 'dex'; }, '#ff9f43');
+  drawButton(rx + 16, controlsY + 53, bw, 52, 'SHOP', () => openOverlay('shop'), '#8f6dff');
+  drawButton(rx + 24 + bw, controlsY + 53, bw, 52, 'GOALS', () => openOverlay('missions'), '#4da8ff');
+  drawButton(rx + 32 + bw * 2, controlsY + 53, bw, 52, 'DEX', () => openOverlay('dex'), '#ff9f43');
 }
 
 let lastTime = performance.now();
@@ -938,7 +990,11 @@ function render(now) {
     }
     // power-up buttons (bottom corners)
     if (meta.state.unlocks.undo) drawButton(10, GAME_H - 60, 118, 48, undoLeft > 0 ? `↶ UNDO ${undoLeft}/1` : 'UNDO USED', useUndo, undoLeft > 0 ? '#5f3dc4' : '#555b70');
-    if (meta.state.unlocks.bomb) drawButton(GAME_W - 128, GAME_H - 60, 118, 48, bombLeft > 0 ? `☀ NOVA ${bombLeft}/1` : 'NOVA USED', useBomb, bombLeft > 0 ? '#e8590c' : '#555b70');
+    if (meta.state.unlocks.bomb) {
+      const novaReady = bombLeft > 0 && planets.length >= 3;
+      const novaLabel = bombLeft <= 0 ? 'NOVA USED' : (novaReady ? `☀ NOVA ${bombLeft}/1` : 'NOVA · 3+');
+      drawButton(GAME_W - 128, GAME_H - 60, 118, 48, novaLabel, useBomb, novaReady ? '#e8590c' : '#555b70');
+    }
     // combo
     if (combo > 1) {
       g.textAlign = 'center';
@@ -1003,9 +1059,9 @@ function render(now) {
     g.fillStyle = 'rgba(255,255,255,0.75)';
     g.fillText('Merge planets. Build the Sun.', GAME_W / 2, 465);
     drawButton(GAME_W / 2 - 110, 500, 220, 64, 'PLAY', startGame, '#37b24d');
-    drawButton(GAME_W / 2 - 165, 585, 100, 46, 'SHOP', () => { overlay = 'shop'; }, '#5f3dc4');
-    drawButton(GAME_W / 2 - 50, 585, 100, 46, 'GOALS', () => { overlay = 'missions'; }, '#1971c2');
-    drawButton(GAME_W / 2 + 65, 585, 100, 46, 'DEX', () => { overlay = 'dex'; }, '#e8590c');
+    drawButton(GAME_W / 2 - 165, 585, 100, 46, 'SHOP', () => openOverlay('shop'), '#5f3dc4');
+    drawButton(GAME_W / 2 - 50, 585, 100, 46, 'GOALS', () => openOverlay('missions'), '#1971c2');
+    drawButton(GAME_W / 2 + 65, 585, 100, 46, 'DEX', () => openOverlay('dex'), '#e8590c');
     g.fillStyle = '#ffd84a';
     g.font = "bold 20px 'Segoe UI', sans-serif";
     g.fillText(`\u2726 ${meta.state.stardust} stardust`, GAME_W / 2, 665);
@@ -1053,7 +1109,7 @@ function render(now) {
       }
       drawButton(GAME_W / 2 - 110, by, 220, 56, 'PLAY AGAIN', restartWithAd, '#37b24d');
       by += 70;
-      drawButton(GAME_W / 2 - 110, by, 220, 44, 'SHOP', () => { overlay = 'shop'; }, '#5f3dc4');
+      drawButton(GAME_W / 2 - 110, by, 220, 44, 'SHOP', () => openOverlay('shop'), '#5f3dc4');
     }
   }
 
@@ -1198,7 +1254,7 @@ function renderOverlay() {
     }
   }
 
-  drawButton(GAME_W / 2 - 80, GAME_H - 70, 160, 50, 'BACK', () => { overlay = null; }, '#4a6cf0');
+  drawButton(GAME_W / 2 - 80, GAME_H - 70, 160, 50, 'BACK', closeOverlay, '#4a6cf0');
 }
 
 
@@ -1208,28 +1264,29 @@ if (location.search.includes('debug=1')) {
     forceGameOver: () => gameOver(),
     restart: () => startGame(),
     getState: () => ({
-      state, score, planets: planets.length, overlay,
+      state, score, combo, planets: planets.length, overlay,
       stardust: meta.state.stardust, unlocks: { ...meta.state.unlocks },
       skin: meta.state.skin, streak: meta.state.streak,
       missionsDone: Object.keys(meta.state.missionsDone).length,
       totalRuns: meta.state.totalRuns, totalMerges: meta.state.totalMerges,
       undoLeft, bombLeft, stardustEarned, paused, simTime,
       tiers: planets.reduce((all, p) => { all[p.tier] = (all[p.tier] || 0) + 1; return all; }, {}),
+      floatTexts: floatTexts.map(({ x, y, w, h, text }) => ({ x, y, w, h, text })),
       counts: { planets: planets.length, particles: particles.length, rings: rings.length, sparkles: sparkles.length, texts: floatTexts.length, telegraphs: mergeTelegraphs.length, queuedMerges: mergeQueue.length, listeners: 13, timers: 0 },
     }),
     addScore: (n) => { score += n; },
     addStardust: (n) => { meta.addStardust(n); meta.save(); },
     buy: (id) => meta.buy(id),
     setSkin: (id) => meta.setSkin(id),
-    openOverlay: (o) => { overlay = o; },
-    closeOverlay: () => { overlay = null; },
+    openOverlay,
+    closeOverlay,
     meta: meta.state,
     spawn: (tier, x, y) => spawnPlanet(tier, x ?? GAME_W / 2, y ?? 200),
     useUndo,
     useBomb,
     advance: (seconds) => {
       const steps = Math.max(0, Math.floor(seconds * 60));
-      for (let i = 0; i < steps; i++) advanceSimulation();
+      for (let i = 0; i < steps; i++) if (!paused) advanceSimulation();
       return window.__astro.getState();
     },
     setPaused: (value) => setPaused('debug', value),
