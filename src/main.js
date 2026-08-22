@@ -377,6 +377,10 @@ function pointerUp(clientX = null, clientY = null) {
   audio.unlockAudio();
   canDrop = false;
   const dropped = spawnPlanet(currentTier, dropX, DROP_Y);
+  if (!meta.state.onboardingComplete) {
+    tutorialUntil = 0;
+    meta.completeOnboarding();
+  }
   lastDrop = { planet: dropped, prevCurrent: currentTier, prevNext: nextTier, prevNext2: nextTier2 };
   audio.dropSound();
   currentTier = nextTier;
@@ -435,12 +439,23 @@ canvas.addEventListener('touchend', e => {
   handleClick(t.clientX, t.clientY);
 }, { passive: false });
 
-// keyboard controls (desktop): arrows move, space/enter drops
+// Keyboard support complements the mouse-first design. Physical key codes keep
+// the cluster usable on AZERTY layouts (labels change, the key position does not).
 const keysHeld = {};
 window.addEventListener('keydown', (e) => {
   if (paused) return;
-  if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') { keysHeld[e.code] = true; e.preventDefault(); }
-  if (e.code === 'Space' || e.code === 'Enter' || e.code === 'ArrowDown') {
+  if (overlay && (e.code === 'Escape' || e.code === 'Backspace')) {
+    e.preventDefault();
+    closeOverlay();
+    return;
+  }
+  if (e.code === 'ArrowLeft' || e.code === 'ArrowRight' || e.code === 'KeyA' || e.code === 'KeyD') {
+    keysHeld[e.code] = true;
+    e.preventDefault();
+  }
+  if (e.code === 'KeyU') { e.preventDefault(); if (!e.repeat) useUndo(); return; }
+  if (e.code === 'KeyB') { e.preventDefault(); if (!e.repeat) useBomb(); return; }
+  if (e.code === 'Space' || e.code === 'Enter' || e.code === 'ArrowDown' || e.code === 'KeyW' || e.code === 'KeyS') {
     e.preventDefault();
     if (overlay) { closeOverlay(); return; }
     pointerUp();
@@ -450,8 +465,8 @@ window.addEventListener('keyup', (e) => { delete keysHeld[e.code]; });
 function keyboardMove(dt) {
   if (state !== 'playing' || overlay) return;
   const sp = 420 * dt;
-  if (keysHeld['ArrowLeft']) dropX = clampDropX(dropX - sp, currentTier);
-  if (keysHeld['ArrowRight']) dropX = clampDropX(dropX + sp, currentTier);
+  if (keysHeld['ArrowLeft'] || keysHeld['KeyA']) dropX = clampDropX(dropX - sp, currentTier);
+  if (keysHeld['ArrowRight'] || keysHeld['KeyD']) dropX = clampDropX(dropX + sp, currentTier);
 }
 
 // button hitboxes (set during render)
@@ -476,7 +491,7 @@ function startGame() {
   nextTier = 0;
   nextTier2 = randTier();
   spawnPlanet(0, GAME_W / 2, GAME_H - TIERS[0].r - 12);
-  tutorialUntil = simTime + 30000;
+  tutorialUntil = meta.state.onboardingComplete ? 0 : simTime + 30000;
   tutorialMerged = false;
   state = 'playing';
   cg.gameplayStart();
@@ -932,9 +947,9 @@ function render(now) {
       const bob = Math.sin(now / 300) * 2;
       drawPlanet(dropX, DROP_Y + bob, 0, currentTier, 0.95, 1, 1, now);
     }
-    // A compact, animated first-action cue replaces a text tutorial. It fades
-    // after the first merge or 30 seconds, whichever comes first.
-    if (!tutorialMerged && simTime < tutorialUntil) {
+    // First-run, in-play visual onboarding. It intentionally uses two concise
+    // labels plus a click gesture, and permanently clears after one valid drop.
+    if (simTime < tutorialUntil) {
       const pulse = 0.5 + 0.5 * Math.sin(now / 260);
       const targetY = GAME_H - TIERS[0].r - 42;
       g.save();
@@ -948,9 +963,16 @@ function render(now) {
       g.setLineDash([]);
       g.fillStyle = '#ffd84a';
       g.beginPath(); g.moveTo(GAME_W / 2 - 8, targetY - 21); g.lineTo(GAME_W / 2 + 8, targetY - 21); g.lineTo(GAME_W / 2, targetY - 8); g.closePath(); g.fill();
-      art.glassPanel(g, GAME_W / 2 - 142, 150, 284, 48, 14);
-      g.fillStyle = '#fff'; g.font = "bold 16px 'Segoe UI', sans-serif"; g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText('DROP ON THE GLOWING PLANET', GAME_W / 2, 174);
+      art.glassPanel(g, GAME_W / 2 - 145, 142, 290, 72, 14);
+      // Simple mouse/touch gesture glyph: cursor, press ripple and drop path.
+      g.globalAlpha = 0.92;
+      g.fillStyle = '#dceaff';
+      g.beginPath(); g.moveTo(GAME_W / 2 - 112, 160); g.lineTo(GAME_W / 2 - 112, 189); g.lineTo(GAME_W / 2 - 104, 181); g.lineTo(GAME_W / 2 - 98, 194); g.lineTo(GAME_W / 2 - 92, 191); g.lineTo(GAME_W / 2 - 99, 176); g.lineTo(GAME_W / 2 - 88, 176); g.closePath(); g.fill();
+      g.strokeStyle = '#ffd84a'; g.lineWidth = 2; g.beginPath(); g.arc(GAME_W / 2 - 107, 168, 14 + pulse * 4, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = '#fff'; g.font = "bold 15px 'Segoe UI', sans-serif"; g.textAlign = 'left'; g.textBaseline = 'middle';
+      g.fillText('CLICK A COLUMN TO DROP', GAME_W / 2 - 80, 165);
+      g.fillStyle = '#ffd84a'; g.font = "bold 13px 'Segoe UI', sans-serif";
+      g.fillText('MATCH THE GLOWING PLUTO', GAME_W / 2 - 80, 188);
       g.restore();
     }
     // HUD
@@ -1270,6 +1292,7 @@ if (location.search.includes('debug=1')) {
       missionsDone: Object.keys(meta.state.missionsDone).length,
       totalRuns: meta.state.totalRuns, totalMerges: meta.state.totalMerges,
       undoLeft, bombLeft, stardustEarned, paused, simTime,
+      onboarding: simTime < tutorialUntil,
       tiers: planets.reduce((all, p) => { all[p.tier] = (all[p.tier] || 0) + 1; return all; }, {}),
       floatTexts: floatTexts.map(({ x, y, w, h, text }) => ({ x, y, w, h, text })),
       counts: { planets: planets.length, particles: particles.length, rings: rings.length, sparkles: sparkles.length, texts: floatTexts.length, telegraphs: mergeTelegraphs.length, queuedMerges: mergeQueue.length, listeners: 13, timers: 0 },

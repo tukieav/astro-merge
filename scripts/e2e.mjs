@@ -57,6 +57,15 @@ await page.mouse.click(box.x + box.width / 2, box.y + box.height * 0.68);
 await page.waitForFunction(() => window.__astro.getState().state === 'playing', null, { timeout: 3000 });
 check('click PLAY starts game', true);
 
+// Regression: mouse/touch-first onboarding is visible during first gameplay,
+// then clears on a successful drop and stays cleared after a reload.
+let st = await page.evaluate(() => window.__astro.getState());
+check('first-run mouse gesture onboarding is present', st.onboarding === true, `onboarding=${st.onboarding}`);
+await page.mouse.click(box.x + box.width / 2, box.y + box.height * 0.22);
+await page.waitForTimeout(80);
+st = await page.evaluate(() => window.__astro.getState());
+check('successful drop dismisses onboarding', st.onboarding === false, `onboarding=${st.onboarding}`);
+
 // keyboard: move + drop several planets
 for (let i = 0; i < 6; i++) {
   await page.keyboard.down(i % 2 ? 'ArrowLeft' : 'ArrowRight');
@@ -67,7 +76,7 @@ for (let i = 0; i < 6; i++) {
   await page.keyboard.up('Space');
   await page.waitForTimeout(600);
 }
-let st = await page.evaluate(() => window.__astro.getState());
+st = await page.evaluate(() => window.__astro.getState());
 check('planets dropped via keyboard', st.planets >= 3, `planets=${st.planets}`);
 
 // force merges: spawn same-tier pairs
@@ -212,6 +221,7 @@ st = await page.evaluate(() => window.__astro.getState());
 check('stardust persists across reload', st.stardust >= sdBefore - 5 && st.stardust > 0, `before=${sdBefore} after=${st.stardust}`);
 check('unlocks persist across reload', st.unlocks.neon === true && st.unlocks.undo === true);
 check('daily streak set', st.streak >= 1, `streak=${st.streak}`);
+check('onboarding stays dismissed after reload', st.onboarding === false, `onboarding=${st.onboarding}`);
 
 // Corrupt local persistence must fall back to the versioned safe schema.
 await page.evaluate(() => localStorage.setItem('astromerge.meta', '{broken json'));
