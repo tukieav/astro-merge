@@ -87,8 +87,25 @@ for (let i=0;i<260;i++){
 
 const sq = H / 1080; // proportional scale
 const square = q.get('sq') === '1';
+const portrait = q.get('portrait') === '1';
 
-if (!square) {
+if (portrait) {
+  // 2:3 store cover: a vertical constellation with clear title-safe space.
+  drawPlanet(W*0.5, H*0.64, 10, 1.38, 0);
+  drawPlanet(W*0.18, H*0.54, 8, 0.58, -0.3);
+  drawPlanet(W*0.80, H*0.53, 9, 0.62, 0.2);
+  drawPlanet(W*0.22, H*0.73, 5, 0.58, 0.1);
+  drawPlanet(W*0.78, H*0.75, 3, 0.66, 0.5);
+  drawPlanet(W*0.37, H*0.44, 1, 0.7, 0);
+  drawPlanet(W*0.63, H*0.42, 0, 0.7, 0);
+  g.textAlign='center'; g.textBaseline='middle';
+  g.shadowColor='rgba(80,140,255,0.8)'; g.shadowBlur=28;
+  g.fillStyle='#ffffff';
+  g.font='900 92px "Segoe UI", Arial, sans-serif';
+  g.fillText('ASTRO', W*0.5, H*0.14);
+  g.fillText('MERGE', W*0.5, H*0.24);
+  g.shadowBlur=0;
+} else if (!square) {
   // 16:9 layout: sun right, arc of planets, title left
   drawPlanet(W*0.78, H*0.5, 10, 2.2*sq, 0);
   drawPlanet(W*0.60, H*0.78, 9, 1.15*sq, 0.2);
@@ -105,9 +122,6 @@ if (!square) {
   g.fillText('ASTRO', W*0.05, H*0.40);
   g.fillText('MERGE', W*0.05, H*0.56);
   g.shadowBlur=0;
-  g.fillStyle='rgba(255,255,255,0.85)';
-  g.font='600 '+(44*sq)+'px "Segoe UI", Arial, sans-serif';
-  g.fillText('Merge planets. Build the Sun.', W*0.052, H*0.68);
 } else {
   // 1:1 layout: sun center-bottom, planets arc above, title top
   drawPlanet(W*0.5, H*0.80, 10, 1.6*sq, 0);
